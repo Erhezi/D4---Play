@@ -1,0 +1,76 @@
+# Registry of Views
+
+# views are the main entry point for the app to understand what data is available, where it is, and how to connect to it.
+# each view represents a specific dataset that users can query against, and contains metadata about the view
+  - view_id: vw_PO_PURCHASEORDER_LINE_WITH_PCAT
+    database: PRIME  # <--- Router uses this to pick the connection
+    display_name: "PO Line Detail (Premier Category Enriched)"
+    description: "Detailed PO line items merged with Premier GPO categories and standardized manufacturer names."
+    sample_questions:
+      - "Show me all Stryker purchases from for last month."
+      - "What is the total spend for 'Cath Lab' in FY26?"
+      - "List all items under the 'COMPUTER MOUSE' Premier category."
+      - "Export all Medline glove spend including manufacturer part numbers, vendor catalog number and vendor."
+    columns:
+    # --- Identity (Saved as Text/String) ---
+    - name: PO
+      label: "PO Number"
+      type: string
+      aliases: ["po #", "order number"]
+    - name: PurchaseOrderLine
+      label: "PO Line"
+      type: string
+      aliases: ["line #"]
+
+    # --- Facility & Dept (String) ---
+    - name: CompanyText
+      concept: facility
+      type: string
+    - name: CostCenterText
+      concept: cost_center
+      type: string
+    - name: IndexText
+      label: "Security/Dept Name"
+      type: string
+      aliases: ["index"]
+
+    # --- Vendor & Manufacturer (String) ---
+    - name: VendorName
+      concept: vendor
+      type: string
+      aliases: ["supplier", "distributor"]
+    - name: ManufacturerName_Premier
+      concept: manufacturer
+      type: string
+    - name: ManufacturerNumber_Premier
+      label: "Mfr Part #"
+      type: string
+
+    # --- Financials (Numeric/Money) ---
+    - name: Quantity
+      label: "Qty"
+      type: numeric
+    - name: VendorBuyUnitCost
+      label: "Unit Price"
+      type: numeric
+    - name: CalculateExtendedAmount
+      label: "Total Spend"
+      type: numeric
+      aliases: ["amount", "cost", "spend"]
+
+    # --- Dates (Date) ---
+    - name: POReleaseDate
+      label: "Order Date"
+      type: date
+
+
+  - view_id: vw_invoice_detail
+    database: SCS    # <--- Router uses this to pick the connection
+    display_name: "Invoice Detail"
+    columns:
+      - name: Supplier_Name
+        concept: vendor
+      - name: Dept_ID
+        concept: cost_center
+      - name: Invoice_Total
+        label: "Invoice Amount"

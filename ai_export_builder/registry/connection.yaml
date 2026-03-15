@@ -1,0 +1,12 @@
+# connections.yaml
+databases:
+  PRIME:
+    connection_string_env: "PRIME_DB_URL"
+    type: "sql_server"
+    database: "PRIME"
+    schema: "[DM_MONTYNT\\dli2]"
+  SCS:
+    connection_string_env: "SCS_DB_URL"
+    type: "sql_server"
+    database: "PBI"
+    schema: "SCSSaving"
