@@ -1,0 +1,53 @@
+# Metadata Registry
+# Each view entry defines available columns with their types, descriptions,
+# and optional aliases that users might use in natural language queries.
+
+views:
+  vw_purchaseorder_line_with_pcat:
+    display_name: "Purchase Order Lines with Product Categories"
+    description: "Purchase order line items enriched with product category data"
+    columns:
+      PONumber:
+        type: string
+        description: "Purchase order number"
+        aliases: ["po number", "po", "purchase order number", "order number"]
+      POLineNumber:
+        type: int
+        description: "Line number within the purchase order"
+        aliases: ["line number", "line"]
+      VendorName:
+        type: string
+        description: "Vendor / supplier name"
+        aliases: ["vendor", "supplier", "supplier name"]
+      ItemDescription:
+        type: string
+        description: "Description of the item"
+        aliases: ["item", "description", "product", "item description"]
+      ProductCategory:
+        type: string
+        description: "Product category classification"
+        aliases: ["category", "product category", "pcat"]
+      UnitPrice:
+        type: decimal
+        description: "Price per unit"
+        aliases: ["price", "unit price", "cost"]
+      Quantity:
+        type: int
+        description: "Quantity ordered"
+        aliases: ["qty", "quantity", "amount"]
+      TotalAmount:
+        type: decimal
+        description: "Total line amount (UnitPrice × Quantity)"
+        aliases: ["total", "total amount", "line total"]
+      OrderDate:
+        type: date
+        description: "Date the purchase order was created"
+        aliases: ["order date", "date", "po date", "created date"]
+      FacilityCode:
+        type: string
+        description: "Facility code for row-level security"
+        aliases: ["facility", "facility code", "site"]
+      FacilityName:
+        type: string
+        description: "Facility name"
+        aliases: ["facility name", "site name"]

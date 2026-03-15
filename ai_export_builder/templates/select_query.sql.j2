@@ -1,0 +1,30 @@
+{# Jinja2 template for SELECT queries — values are NEVER interpolated here.
+   All filter values are passed as ? parameters to pyodbc. #}
+SELECT
+{% for col in columns %}
+    [{{ col }}]{{ "," if not loop.last else "" }}
+{% endfor %}
+FROM [{{ view }}]
+WHERE 1=1
+{% for f in filters %}
+{% if f.operator == "between" %}
+    AND [{{ f.column }}] BETWEEN ? AND ?
+{% elif f.operator == "in" %}
+    AND [{{ f.column }}] IN ({{ f.placeholders }})
+{% elif f.operator == "like" %}
+    AND [{{ f.column }}] LIKE ?
+{% elif f.operator == "neq" %}
+    AND [{{ f.column }}] <> ?
+{% else %}
+    AND [{{ f.column }}] {{ f.sql_op }} ?
+{% endif %}
+{% endfor %}
+{% if rls_column and rls_values %}
+{% if rls_all %}
+    {# ALL facilities — no RLS restriction needed #}
+{% else %}
+    AND [{{ rls_column }}] IN ({{ rls_placeholders }})
+{% endif %}
+{% endif %}
+ORDER BY 1
+OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
