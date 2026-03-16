@@ -78,6 +78,8 @@ cp ai_export_builder/.env.example ai_export_builder/.env
 
 Edit `ai_export_builder/.env` with your actual values:
 - `OPENAI_API_KEY` — your OpenAI API key
+- `OPENAI_CA_BUNDLE` — optional PEM file for a corporate proxy/private CA if TLS interception is in place
+- `OPENAI_USE_SYSTEM_CERT_STORE` — defaults to `true`; uses the Windows/OS trust store for OpenAI calls
 - `PRIME_DB_URL` / `SCS_DB_URL` — pyodbc connection strings for each database
 - Adjust `FISCAL_YEAR_START_MONTH`, `MAX_EXPORT_ROWS`, etc. as needed
 
@@ -153,9 +155,15 @@ pytest ai_export_builder/tests/ -v
 |---|---|---|
 | `OPENAI_API_KEY` | (required) | OpenAI API key |
 | `OPENAI_MODEL` | `gpt-5-mini` | Model for intent parsing |
+| `OPENAI_CA_BUNDLE` | blank | Optional PEM bundle for corporate TLS inspection / private CAs |
+| `OPENAI_USE_SYSTEM_CERT_STORE` | `true` | Use the OS certificate store for OpenAI HTTPS requests |
 | `PRIME_DB_URL` | (required) | pyodbc connection string for PRIME database |
 | `SCS_DB_URL` | (required) | pyodbc connection string for SCS/PBI database |
 | `DAILY_REQUEST_LIMIT` | `10` | Max requests per user per day |
 | `MAX_EXPORT_ROWS` | `1000000` | Row limit per export query |
 | `FISCAL_YEAR_START_MONTH` | `1` | January = 1, October = 10 |
 | `TEST_USER_FACILITIES` | `["ALL"]` | JSON list of facility codes for RLS |
+
+## TLS / Corporate Proxy Notes
+
+If OpenAI requests fail with `CERTIFICATE_VERIFY_FAILED`, the app now uses the OS trust store by default for HTTPS validation. On locked-down corporate networks, you may still need to export your organization's root/intermediate certificate as a PEM file and point `OPENAI_CA_BUNDLE` at it.

@@ -36,12 +36,21 @@ _MOCK_LLM_RESPONSE = json.dumps({
 })
 
 
+def _mock_openai_response(content: str):
+    """Build a mock OpenAI client whose responses.create() returns *content*."""
+    mock_cls = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.output_text = content
+    mock_cls.return_value.responses.create.return_value = mock_resp
+    return mock_cls
+
+
 class TestParseIntent:
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_successful_parse(self, mock_chat_cls):
-        mock_response = MagicMock()
-        mock_response.content = _MOCK_LLM_RESPONSE
-        mock_chat_cls.return_value.invoke.return_value = mock_response
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_successful_parse(self, mock_openai_cls):
+        mock_resp = MagicMock()
+        mock_resp.output_text = _MOCK_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
 
         state = _make_state()
         result = node_parse_intent(state)
@@ -52,9 +61,9 @@ class TestParseIntent:
         assert len(result["intent"].filters) == 2
         assert result["validation_errors"] == []
 
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_llm_failure_returns_error(self, mock_chat_cls):
-        mock_chat_cls.return_value.invoke.side_effect = RuntimeError("API unavailable")
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_llm_failure_returns_error(self, mock_openai_cls):
+        mock_openai_cls.return_value.responses.create.side_effect = RuntimeError("API unavailable")
 
         state = _make_state()
         result = node_parse_intent(state)
@@ -64,11 +73,11 @@ class TestParseIntent:
         assert "LLM parsing error" in result["validation_errors"][0]
         assert result["status"] == "failed"
 
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_invalid_json_returns_error(self, mock_chat_cls):
-        mock_response = MagicMock()
-        mock_response.content = "not json at all"
-        mock_chat_cls.return_value.invoke.return_value = mock_response
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_invalid_json_returns_error(self, mock_openai_cls):
+        mock_resp = MagicMock()
+        mock_resp.output_text = "not json at all"
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
 
         state = _make_state()
         result = node_parse_intent(state)
@@ -76,11 +85,11 @@ class TestParseIntent:
         assert result["intent"] is None
         assert len(result["validation_errors"]) > 0
 
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_retry_includes_validation_feedback(self, mock_chat_cls):
-        mock_response = MagicMock()
-        mock_response.content = _MOCK_LLM_RESPONSE
-        mock_chat_cls.return_value.invoke.return_value = mock_response
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_retry_includes_validation_feedback(self, mock_openai_cls):
+        mock_resp = MagicMock()
+        mock_resp.output_text = _MOCK_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
 
         state = _make_state()
         state["validation_errors"] = ["Column 'FakeCol' does not exist"]
@@ -88,7 +97,20 @@ class TestParseIntent:
 
         result = node_parse_intent(state)
         # Check that the LLM was called (it should receive feedback in the user message)
-        call_args = mock_chat_cls.return_value.invoke.call_args
-        messages = call_args[0][0]
+        call_args = mock_openai_cls.return_value.responses.create.call_args
+        messages = call_args[1]["input"]
         user_msg = messages[1]["content"]
         assert "FakeCol" in user_msg
+
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_certificate_error_returns_actionable_message(self, mock_openai_cls):
+        mock_openai_cls.return_value.responses.create.side_effect = RuntimeError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+        )
+
+        state = _make_state()
+        result = node_parse_intent(state)
+
+        assert result["intent"] is None
+        assert len(result["validation_errors"]) == 1
+        assert "OPENAI_CA_BUNDLE" in result["validation_errors"][0]

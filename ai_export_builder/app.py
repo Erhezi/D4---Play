@@ -1,6 +1,10 @@
 """Streamlit entry point for the AI-Assisted Export Builder."""
 from __future__ import annotations
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import uuid
 from datetime import date
 
@@ -77,6 +81,24 @@ with st.sidebar:
                     "awaiting_confirmation", "awaiting_disambiguation", "result_df"]:
             st.session_state.pop(key, None)
         st.rerun()
+
+    # Show SQL button — visible whenever an intent has been parsed
+    _gs = st.session_state.get("graph_state") or {}
+    _intent = _gs.get("intent")
+    if _intent is not None:
+        st.divider()
+        if st.button("🔍 Show SQL"):
+            st.session_state.show_sql = not st.session_state.get("show_sql", False)
+        if st.session_state.get("show_sql"):
+            try:
+                _sql, _params = build_query(_intent, settings.user_facilities)
+                st.markdown("**Generated SQL**")
+                st.code(_sql, language="sql")
+                if _params:
+                    st.markdown("**Parameters**")
+                    st.json(list(_params))
+            except Exception as _exc:
+                st.warning(f"Could not render SQL: {_exc}")
 
 # ---------------------------------------------------------------------------
 # Main area
@@ -228,8 +250,6 @@ if user_input:
             "validation_errors": [],
             "status": "parsing",
             "retry_count": 0,
-            "disambiguation_needed": False,
-            "disambiguation_results": [],
             "temporal_context": TemporalContext(
                 current_date=date.today().isoformat(),
                 fiscal_year_start_month=settings.fiscal_year_start_month,
@@ -261,21 +281,7 @@ if user_input:
             st.session_state.graph_state = graph_state
             status = graph_state.get("status", "unknown")
 
-            if status == "pending_disambiguation":
-                # Graph paused at disambiguation HITL breakpoint
-                intent = graph_state.get("intent")
-                results = graph_state.get("disambiguation_results", [])
-                total_matches = sum(len(r.get("matches", [])) for r in results)
-                if intent and results:
-                    add_message(
-                        "assistant",
-                        f"🔍 Found **{total_matches}** matching entities. "
-                        "Please review and confirm which ones to include.",
-                    )
-                st.session_state.awaiting_disambiguation = True
-                st.rerun()
-
-            elif status == "pending_approval":
+            if status == "pending_approval":
                 # Graph paused at HITL breakpoint
                 intent = graph_state.get("intent")
                 if intent:

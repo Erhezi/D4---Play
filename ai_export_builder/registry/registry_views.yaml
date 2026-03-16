@@ -8,6 +8,7 @@
 # each view represents a specific dataset that users can query against, and contains metadata about the view
   - view_id: vw_PO_PURCHASEORDER_LINE_WITH_PCAT
     database: PRIME  # <--- Router uses this to pick the connection
+    view_schema: "[DM_MONTYNT\\dli2]" # <-- the view schema is used for query generation.
     display_name: "PO Line Detail (Premier Category Enriched)"
     description: "Detailed PO line items merged with Premier GPO categories and standardized manufacturer names."
     field_groups:
@@ -157,13 +158,24 @@
       required_for_field_mapping: "CcDescription_Premier" #<- this means the AI Orchestrator must include this field in the output if "CcDescription_Premier" is selected, even if user doesn't explicitly ask for it, because it's required for joins with other views.
 
 
-  - view_id: vw_invoice_detail
+  - view_id: vw_MainSavings
     database: SCS    # <--- Router uses this to pick the connection
-    display_name: "Invoice Detail"
+    view_schema: "SCSSaving" # <-- the view schema is used for query generation.
+    display_name: "SCS Savings Details (Operational + Rebate)"
+    decription: "Detailed savings data from Wave project and Savings' tracker rebate section."
+    field_groups:
+      - group_name: "SCS Savings Details"
+        group_type: "basic" # <-- required fields in any flat output, no matter how filtered, those fields should always be present
+        description: "Core savings details including when, under which index, to whom, what item, and how much was saved."
+        columns_included: ["Savings Channel", "ID", "Initiative Description", "Accountable Workstream", "Project Stage", "Rebate Status", "Total Savings", "Start Date", "Saving Entered Year", "Saving Realization Year"]
     columns:
-      - name: Supplier_Name
-        concept: vendor
-      - name: Dept_ID
-        concept: cost_center
-      - name: Invoice_Total
-        label: "Invoice Amount"
+      - name: Savings Channel
+        label: "Savings Channel"
+        concept: where the saving is coming from, operational or rebate.
+        type: string
+        aliases: ["savings channel", "channel", "source type"]
+      - name: Accountable Workstream
+        label: "Accountable Workstream"
+        concept: the workstream that is accountable for the saving, can be Rebate, Med/Surg, Pharmacy, or PPI.
+        type: string
+        aliases: ["accountable workstream", "workstream", "accountable ws"]

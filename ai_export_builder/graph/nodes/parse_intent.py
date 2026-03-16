@@ -6,11 +6,12 @@ import json
 import logging
 from typing import Any
 
-from langchain_openai import ChatOpenAI
+from openai import OpenAI
 
 from ai_export_builder.config import settings
 from ai_export_builder.graph.state import ExportState
 from ai_export_builder.models.intent import ExportIntent
+from ai_export_builder.services.openai_client import build_openai_http_client
 from ai_export_builder.services.registry_loader import load_registry
 from ai_export_builder.services.temporal import resolve as resolve_temporal
 
@@ -121,28 +122,58 @@ def _looks_like_date(val: str) -> bool:
     return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", val.strip()))
 
 
+def _format_llm_error(exc: Exception) -> str:
+    """Return a user-facing error string with SSL guidance when applicable."""
+    message = str(exc)
+    lower_message = message.lower()
+
+    if "certificate verify failed" in lower_message or "certificate_verify_failed" in lower_message:
+        return (
+            "LLM parsing error: TLS certificate validation failed while connecting to OpenAI. "
+            "This environment may require the Windows/system certificate store or a corporate CA bundle. "
+            "If the error persists, set OPENAI_CA_BUNDLE to your organization's PEM certificate file."
+        )
+
+    if isinstance(exc, FileNotFoundError) and "OPENAI_CA_BUNDLE" in message:
+        return f"LLM configuration error: {message}"
+
+    return f"LLM parsing error ({type(exc).__name__}): {exc}"
+
+
 def node_parse_intent(state: ExportState) -> dict[str, Any]:
     """LangGraph node: call OpenAI to parse user query into ExportIntent."""
     logger.info("node_parse_intent: parsing user query (retry %d)", state.get("retry_count", 0))
 
-    llm = ChatOpenAI(
-        api_key=settings.openai_api_key,
-        model=settings.openai_model,
-        temperature=0,
-        model_kwargs={"response_format": {"type": "json_object"}},
-    )
-
     system_prompt = _build_system_prompt(state)
     user_message = _build_user_message(state)
 
-    try:
-        response = llm.invoke([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ])
+    if not settings.openai_api_key:
+        logger.error("node_parse_intent: OPENAI_API_KEY is not set")
+        return {
+            "intent": None,
+            "validation_errors": ["OPENAI_API_KEY is not configured. "
+                                  "Set it as an environment variable or in .env."],
+            "status": "failed",
+        }
 
-        raw = response.content
-        data = json.loads(raw)  # type: ignore[arg-type]
+    try:
+        with build_openai_http_client() as http_client:
+            client = OpenAI(
+                api_key=settings.openai_api_key,
+                base_url=settings.openai_base_url or None,
+                http_client=http_client,
+            )
+            response = client.responses.create(
+                model=settings.openai_model,
+                input=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                text={"format": {"type": "json_object"}},
+            )
+
+        raw = response.output_text
+        data = json.loads(raw)
         intent = ExportIntent(**data)
 
         # Post-process temporal expressions in filters
@@ -156,9 +187,13 @@ def node_parse_intent(state: ExportState) -> dict[str, Any]:
             "status": "parsing",
         }
     except Exception as exc:
-        logger.error("node_parse_intent: LLM call failed — %s", exc)
+        import traceback
+        logger.error(
+            "node_parse_intent: LLM call failed — %s: %s\n%s",
+            type(exc).__name__, exc, traceback.format_exc(),
+        )
         return {
             "intent": None,
-            "validation_errors": [f"LLM parsing error: {exc}"],
+            "validation_errors": [_format_llm_error(exc)],
             "status": "failed",
         }

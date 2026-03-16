@@ -62,11 +62,11 @@ def _initial_state(query: str = "Export all Medline glove spend") -> ExportState
 
 
 def _mock_llm_response(content: str):
-    """Create a mock ChatOpenAI that returns the given content."""
+    """Create a mock OpenAI client whose responses.create() returns *content*."""
     mock_cls = MagicMock()
     mock_response = MagicMock()
-    mock_response.content = content
-    mock_cls.return_value.invoke.return_value = mock_response
+    mock_response.output_text = content
+    mock_cls.return_value.responses.create.return_value = mock_response
     return mock_cls
 
 
@@ -77,12 +77,11 @@ def _mock_llm_response(content: str):
 class TestFullWorkflowPausesAtApproval:
     """Test that the graph pauses at the HITL breakpoint with a valid intent."""
 
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_graph_pauses_at_pending_approval(self, mock_chat_cls):
-        mock_chat_cls.side_effect = _mock_llm_response(_GOOD_LLM_RESPONSE).side_effect
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_graph_pauses_at_pending_approval(self, mock_openai_cls):
         mock_response = MagicMock()
-        mock_response.content = _GOOD_LLM_RESPONSE
-        mock_chat_cls.return_value.invoke.return_value = mock_response
+        mock_response.output_text = _GOOD_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_response
 
         app = compile_graph()
         state = _initial_state()
@@ -105,17 +104,17 @@ class TestFullWorkflowPausesAtApproval:
 class TestRetryLoop:
     """Verify that validation failures trigger retries before surfacing errors."""
 
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_invalid_then_valid_retries(self, mock_chat_cls):
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_invalid_then_valid_retries(self, mock_openai_cls):
         """First call returns invalid columns, second returns valid ones."""
         bad_resp = MagicMock()
-        bad_resp.content = _BAD_LLM_RESPONSE
+        bad_resp.output_text = _BAD_LLM_RESPONSE
         good_resp = MagicMock()
-        good_resp.content = _GOOD_LLM_RESPONSE
+        good_resp.output_text = _GOOD_LLM_RESPONSE
 
         mock_instance = MagicMock()
-        mock_instance.invoke.side_effect = [bad_resp, good_resp]
-        mock_chat_cls.return_value = mock_instance
+        mock_instance.responses.create.side_effect = [bad_resp, good_resp]
+        mock_openai_cls.return_value = mock_instance
 
         app = compile_graph()
         state = _initial_state()
@@ -137,8 +136,8 @@ class TestExecuteExportWithMockDB:
     """Test that after confirmation, the execute node runs SQL via the DB service."""
 
     @patch("ai_export_builder.graph.nodes.execute_export.execute_query_for_view")
-    @patch("ai_export_builder.graph.nodes.parse_intent.ChatOpenAI")
-    def test_full_flow_with_mock_db(self, mock_chat_cls, mock_exec_query):
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_full_flow_with_mock_db(self, mock_openai_cls, mock_exec_query):
         """Run the full flow: parse → validate → (pause) → execute with mock DB.
 
         Phase 1 uses the LangGraph stream (pauses at pending_approval).
@@ -148,8 +147,8 @@ class TestExecuteExportWithMockDB:
         from ai_export_builder.graph.nodes.execute_export import node_execute_export
 
         mock_response = MagicMock()
-        mock_response.content = _GOOD_LLM_RESPONSE
-        mock_chat_cls.return_value.invoke.return_value = mock_response
+        mock_response.output_text = _GOOD_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_response
 
         # Mock DB returns a small DataFrame
         mock_exec_query.return_value = pd.DataFrame({
