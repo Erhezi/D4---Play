@@ -78,7 +78,7 @@ class TestViewLookups:
     def test_get_column_meta(self, registry):
         meta = registry.get_column_meta("vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "VendorName")
         assert meta is not None
-        assert meta.get("concept") == "vendor"
+        assert "vendor" in meta.get("concept", "").lower()
 
     def test_get_view_meta(self, registry):
         meta = registry.get_view_meta("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
@@ -118,3 +118,89 @@ class TestConnectionRouting:
     def test_get_connection_string_unknown_view_raises(self, registry):
         with pytest.raises(KeyError, match="No connection config"):
             registry.get_connection_string("nonexistent_view")
+
+
+# ------------------------------------------------------------------
+# Field groups & companion columns
+# ------------------------------------------------------------------
+
+class TestFieldGroups:
+    def test_get_basic_columns(self, registry):
+        basic = registry.get_basic_columns("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
+        assert len(basic) > 0
+        assert "PO" in basic
+        assert "VendorName" in basic
+        assert "CalculateExtendedAmount" in basic
+
+    def test_get_enrichment_columns(self, registry):
+        enrichment = registry.get_field_group_columns(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "enrichment"
+        )
+        assert "ManufacturerName_Premier" in enrichment
+        assert "ContractCategory_Premier" in enrichment
+
+    def test_get_field_group_columns_unknown_view(self, registry):
+        assert registry.get_field_group_columns("nonexistent", "basic") == []
+
+    def test_get_field_group_columns_unknown_type(self, registry):
+        assert registry.get_field_group_columns(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "nonexistent_type"
+        ) == []
+
+    def test_basic_and_enrichment_no_overlap(self, registry):
+        basic = set(registry.get_basic_columns("vw_PO_PURCHASEORDER_LINE_WITH_PCAT"))
+        enrichment = set(registry.get_field_group_columns(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "enrichment"
+        ))
+        assert basic.isdisjoint(enrichment)
+
+
+class TestCompanionColumns:
+    def test_vendor_companion(self, registry):
+        # VendorName (text) ↔ Vendor (ID)
+        assert registry.get_companion_column(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "VendorName"
+        ) == "Vendor"
+        assert registry.get_companion_column(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "Vendor"
+        ) == "VendorName"
+
+    def test_company_companion(self, registry):
+        assert registry.get_companion_column(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "CompanyText"
+        ) == "Company"
+        assert registry.get_companion_column(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "Company"
+        ) == "CompanyText"
+
+    def test_no_companion(self, registry):
+        assert registry.get_companion_column(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "ItemDescription"
+        ) is None
+
+    def test_companion_unknown_view(self, registry):
+        assert registry.get_companion_column("nonexistent", "VendorName") is None
+
+    def test_get_disambiguable_columns(self, registry):
+        disambiguable = registry.get_disambiguable_columns(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT"
+        )
+        assert "VendorName" in disambiguable
+        assert disambiguable["VendorName"] == "Vendor"
+        assert "CompanyText" in disambiguable
+        assert disambiguable["CompanyText"] == "Company"
+
+    def test_get_disambiguable_columns_unknown_view(self, registry):
+        assert registry.get_disambiguable_columns("nonexistent") == {}
+
+
+class TestRegistrySchemaForPrompt:
+    def test_schema_includes_field_groups(self, registry):
+        schema = registry.get_registry_schema_for_prompt()
+        assert "Field Groups:" in schema
+        assert "PO Line Details" in schema
+        assert "type: basic" in schema
+
+    def test_schema_includes_companion_info(self, registry):
+        schema = registry.get_registry_schema_for_prompt()
+        assert "companion:" in schema

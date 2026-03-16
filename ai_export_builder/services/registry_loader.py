@@ -47,10 +47,19 @@ class Registry:
         self._connections: dict[str, Any] = connections.get("databases", {})
         # Build lowercased alias → (view_id, column_name) index
         self._alias_index: dict[str, tuple[str, str]] = {}
+        # Build bidirectional companion index: (view_id, col) → companion_col
+        # e.g. ("vw_PO_...", "VendorName") → "Vendor" and vice-versa
+        self._companion_index: dict[tuple[str, str], str] = {}
         for view_id, view_meta in self._views.items():
             for col_name, col_meta in view_meta.get("columns", {}).items():
                 for alias in col_meta.get("aliases", []):
                     self._alias_index[alias.lower()] = (view_id, col_name)
+                # Build companion pairs from required_for_field_mapping
+                mapping_target = col_meta.get("required_for_field_mapping")
+                if mapping_target:
+                    # col_name (ID) is required when mapping_target (text) is selected
+                    self._companion_index[(view_id, col_name)] = mapping_target
+                    self._companion_index[(view_id, mapping_target)] = col_name
 
     # ------------------------------------------------------------------
     # Connection routing
@@ -103,6 +112,46 @@ class Registry:
                 hits.add(result[0])
         return sorted(hits)
 
+    # ------------------------------------------------------------------
+    # Field groups & companion columns
+    # ------------------------------------------------------------------
+
+    def get_field_group_columns(self, view_id: str, group_type: str) -> list[str]:
+        """Return column names belonging to field groups of the given type."""
+        view = self._views.get(view_id)
+        if not view:
+            return []
+        result: list[str] = []
+        for group in view.get("field_groups", []):
+            if group.get("group_type") == group_type:
+                result.extend(group.get("columns_included", []))
+        return result
+
+    def get_basic_columns(self, view_id: str) -> list[str]:
+        """Return columns from all 'basic' field groups (always included in output)."""
+        return self.get_field_group_columns(view_id, "basic")
+
+    def get_companion_column(self, view_id: str, column: str) -> str | None:
+        """Return the companion column for a text↔ID pair, or None."""
+        return self._companion_index.get((view_id, column))
+
+    def get_disambiguable_columns(self, view_id: str) -> dict[str, str]:
+        """Return {text_column: id_column} for columns that have a companion pair.
+
+        Only returns entries where the column has ``required_for_field_mapping``
+        (i.e. the ID column pointing to the text column).
+        """
+        view = self._views.get(view_id)
+        if not view:
+            return {}
+        result: dict[str, str] = {}
+        for col_name, col_meta in view.get("columns", {}).items():
+            mapping_target = col_meta.get("required_for_field_mapping")
+            if mapping_target:
+                # col_name is the ID, mapping_target is the text column
+                result[mapping_target] = col_name
+        return result
+
     def get_all_columns(self, view_id: str) -> list[str]:
         """Return all column names for a given view, or empty list if unknown."""
         view = self._views.get(view_id)
@@ -141,6 +190,17 @@ class Registry:
                 lines.append("  Sample Questions:")
                 for sq in samples:
                     lines.append(f"    - {sq}")
+            # Field groups
+            field_groups = view_meta.get("field_groups", [])
+            if field_groups:
+                lines.append("  Field Groups:")
+                for fg in field_groups:
+                    gname = fg.get("group_name", "")
+                    gtype = fg.get("group_type", "")
+                    gdesc = fg.get("description", "")
+                    gcols = fg.get("columns_included", [])
+                    lines.append(f"    - {gname} (type: {gtype}): {gdesc}")
+                    lines.append(f"      Columns: [{', '.join(gcols)}]")
             lines.append("  Columns:")
             for col_name, col_meta in view_meta.get("columns", {}).items():
                 parts: list[str] = [f"{col_name} ({col_meta.get('type', 'string')})"]
@@ -153,6 +213,9 @@ class Registry:
                 aliases = col_meta.get("aliases", [])
                 if aliases:
                     parts.append(f"aliases: [{', '.join(aliases)}]")
+                companion = self.get_companion_column(view_id, col_name)
+                if companion:
+                    parts.append(f"companion: {companion}")
                 lines.append(f"    - {' | '.join(parts)}")
             lines.append("")
         return "\n".join(lines)

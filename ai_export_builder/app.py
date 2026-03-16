@@ -22,6 +22,7 @@ from ai_export_builder.ui.chat import (
     init_session_state,
     render_chat_history,
 )
+from ai_export_builder.ui.disambiguation_card import render_disambiguation_card
 from ai_export_builder.ui.verification_card import render_verification_card
 
 # ---------------------------------------------------------------------------
@@ -72,7 +73,8 @@ with st.sidebar:
 
     st.divider()
     if st.button("🗑️ Clear conversation"):
-        for key in ["messages", "graph_state", "thread_id", "awaiting_confirmation", "result_df"]:
+        for key in ["messages", "graph_state", "thread_id",
+                    "awaiting_confirmation", "awaiting_disambiguation", "result_df"]:
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -82,6 +84,32 @@ with st.sidebar:
 st.header("AI-Assisted Export Builder")
 
 render_chat_history()
+
+# ---------------------------------------------------------------------------
+# Disambiguation card (HITL breakpoint — appears before verification)
+# ---------------------------------------------------------------------------
+if st.session_state.get("awaiting_disambiguation"):
+    graph_state: dict = st.session_state.graph_state
+    intent: ExportIntent | None = graph_state.get("intent")
+    disambiguation_results = graph_state.get("disambiguation_results", [])
+
+    if intent is not None and disambiguation_results:
+        confirmed, updated_intent = render_disambiguation_card(
+            intent, disambiguation_results
+        )
+
+        if confirmed and updated_intent is not None:
+            st.session_state.awaiting_disambiguation = False
+            graph_state["intent"] = updated_intent
+            graph_state["disambiguation_needed"] = False
+            st.session_state.graph_state = graph_state
+
+            add_message(
+                "assistant",
+                "Entity selection confirmed. Please review the full export details below.",
+            )
+            st.session_state.awaiting_confirmation = True
+            st.rerun()
 
 # ---------------------------------------------------------------------------
 # Verification card (HITL breakpoint)
@@ -200,6 +228,8 @@ if user_input:
             "validation_errors": [],
             "status": "parsing",
             "retry_count": 0,
+            "disambiguation_needed": False,
+            "disambiguation_results": [],
             "temporal_context": TemporalContext(
                 current_date=date.today().isoformat(),
                 fiscal_year_start_month=settings.fiscal_year_start_month,
@@ -231,7 +261,21 @@ if user_input:
             st.session_state.graph_state = graph_state
             status = graph_state.get("status", "unknown")
 
-            if status == "pending_approval":
+            if status == "pending_disambiguation":
+                # Graph paused at disambiguation HITL breakpoint
+                intent = graph_state.get("intent")
+                results = graph_state.get("disambiguation_results", [])
+                total_matches = sum(len(r.get("matches", [])) for r in results)
+                if intent and results:
+                    add_message(
+                        "assistant",
+                        f"🔍 Found **{total_matches}** matching entities. "
+                        "Please review and confirm which ones to include.",
+                    )
+                st.session_state.awaiting_disambiguation = True
+                st.rerun()
+
+            elif status == "pending_approval":
                 # Graph paused at HITL breakpoint
                 intent = graph_state.get("intent")
                 if intent:

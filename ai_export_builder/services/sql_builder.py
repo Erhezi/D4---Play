@@ -84,3 +84,35 @@ def build_query(
     )
 
     return sql.strip(), params
+
+
+def build_disambiguation_query(
+    view_id: str,
+    text_col: str,
+    id_col: str,
+    like_value: str,
+    user_facilities: list[str] | None = None,
+    max_rows: int = 50,
+) -> tuple[str, list[Any]]:
+    """Return (sql, params) for a SELECT DISTINCT preview of text↔ID pairs.
+
+    Used to show the user which entities match a LIKE filter before the
+    full export runs.  All values are parameterized.
+    """
+    facilities = user_facilities or settings.user_facilities
+    params: list[Any] = [like_value]
+
+    rls_clause = ""
+    if "ALL" not in facilities:
+        rls_placeholders = ", ".join("?" for _ in facilities)
+        rls_clause = f"AND [FacilityCode] IN ({rls_placeholders})"
+        params.extend(facilities)
+
+    sql = (
+        f"SELECT DISTINCT TOP {int(max_rows)} [{text_col}], [{id_col}]\n"
+        f"FROM [{view_id}]\n"
+        f"WHERE [{text_col}] LIKE ?\n"
+        f"{rls_clause}\n"
+        f"ORDER BY [{text_col}]"
+    )
+    return sql.strip(), params

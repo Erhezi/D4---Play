@@ -113,3 +113,71 @@ class TestInvalidIntents:
         state = _make_state(intent, validation_errors=["old error from previous run"])
         result = node_validate_intent(state)
         assert result["validation_errors"] == []
+
+
+class TestColumnResolution:
+    """Test that _resolve_columns correctly expands columns after validation."""
+
+    def test_basic_columns_always_included(self):
+        """Even if the user only asks for VendorName, basic group columns should appear."""
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=[],  # LLM returns empty (basic auto-included)
+            filters=[],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+        # After resolution, intent.columns should include basic group columns
+        assert "PO" in intent.columns
+        assert "VendorName" in intent.columns
+        assert "CalculateExtendedAmount" in intent.columns
+
+    def test_enrichment_columns_added_when_requested(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["ContractCategory_Premier"],
+            filters=[],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+        assert "ContractCategory_Premier" in intent.columns
+        # Basic columns should also be present
+        assert "PO" in intent.columns
+
+    def test_filter_column_added_to_output(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=[],
+            filters=[
+                FilterItem(column="CostCenterText", operator=FilterOperator.like, value="%ICU%"),
+            ],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+        assert "CostCenterText" in intent.columns
+
+    def test_companion_column_auto_included(self):
+        """If VendorName is in output, Vendor (its companion) should be too."""
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["CostCenterText"],  # has companion CostCenter
+            filters=[],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+        assert "CostCenterText" in intent.columns
+        assert "CostCenter" in intent.columns
+
+    def test_no_duplicate_columns(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName", "PO"],
+            filters=[
+                FilterItem(column="VendorName", operator=FilterOperator.like, value="%med%"),
+            ],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+        # VendorName should appear only once
+        assert intent.columns.count("VendorName") == 1
+        assert intent.columns.count("PO") == 1

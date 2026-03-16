@@ -37,24 +37,89 @@ def render_verification_card(
     display_name = (view_meta or {}).get("display_name", intent.selected_view)
     st.markdown(f"**View:** {display_name} (`{intent.selected_view}`)")
 
-    # --- Column selection (checkboxes) ---
+    # --- Column selection (grouped by field groups, companions shown together) ---
     st.markdown("**Columns:**")
+
+    basic_cols = set(registry.get_basic_columns(intent.selected_view))
     all_columns = registry.get_all_columns(intent.selected_view)
+    # Track which columns have a companion so we can render them on the same line
+    companion_rendered: set[str] = set()
     selected_columns: list[str] = []
 
-    cols_per_row = 3
-    for i in range(0, len(all_columns), cols_per_row):
-        row_cols = st.columns(cols_per_row)
-        for j, col_widget in enumerate(row_cols):
-            idx = i + j
-            if idx >= len(all_columns):
-                break
-            col_name = all_columns[idx]
-            col_meta = registry.get_column_meta(intent.selected_view, col_name) or {}
-            label = col_meta.get("label", col_name)
-            checked = col_name in intent.columns
-            if col_widget.checkbox(f"{label} ({col_name})", value=checked, key=f"col_{col_name}"):
-                selected_columns.append(col_name)
+    # Group: Basic columns (always included, non-removable)
+    field_groups = (view_meta or {}).get("field_groups", [])
+    for fg in field_groups:
+        group_name = fg.get("group_name", "Columns")
+        group_type = fg.get("group_type", "")
+        group_cols = fg.get("columns_included", [])
+        is_basic = group_type == "basic"
+
+        st.markdown(f"*{group_name}* {'(always included)' if is_basic else ''}")
+
+        cols_per_row = 3
+        for i in range(0, len(group_cols), cols_per_row):
+            row_cols = st.columns(cols_per_row)
+            for j, col_widget in enumerate(row_cols):
+                idx = i + j
+                if idx >= len(group_cols):
+                    break
+                col_name = group_cols[idx]
+                if col_name in companion_rendered:
+                    continue
+                col_meta = registry.get_column_meta(intent.selected_view, col_name) or {}
+                label = col_meta.get("label", col_name)
+
+                # Show companion pair together
+                companion = registry.get_companion_column(intent.selected_view, col_name)
+                if companion and companion in group_cols:
+                    comp_meta = registry.get_column_meta(intent.selected_view, companion) or {}
+                    comp_label = comp_meta.get("label", companion)
+                    display_label = f"{label} ({col_name}) + {comp_label} ({companion})"
+                    companion_rendered.add(companion)
+                else:
+                    display_label = f"{label} ({col_name})"
+
+                checked = col_name in intent.columns
+                if is_basic:
+                    col_widget.checkbox(display_label, value=True, disabled=True, key=f"col_{col_name}")
+                    selected_columns.append(col_name)
+                    if companion and companion in group_cols:
+                        selected_columns.append(companion)
+                else:
+                    if col_widget.checkbox(display_label, value=checked, key=f"col_{col_name}"):
+                        selected_columns.append(col_name)
+                        if companion and companion in group_cols:
+                            selected_columns.append(companion)
+
+    # Any remaining columns not in any field group
+    grouped_cols = set()
+    for fg in field_groups:
+        grouped_cols.update(fg.get("columns_included", []))
+    ungrouped = [c for c in all_columns if c not in grouped_cols and c not in companion_rendered]
+
+    if ungrouped:
+        st.markdown("*Other Columns*")
+        cols_per_row = 3
+        for i in range(0, len(ungrouped), cols_per_row):
+            row_cols = st.columns(cols_per_row)
+            for j, col_widget in enumerate(row_cols):
+                idx = i + j
+                if idx >= len(ungrouped):
+                    break
+                col_name = ungrouped[idx]
+                col_meta = registry.get_column_meta(intent.selected_view, col_name) or {}
+                label = col_meta.get("label", col_name)
+                companion = registry.get_companion_column(intent.selected_view, col_name)
+                if companion:
+                    comp_meta = registry.get_column_meta(intent.selected_view, companion) or {}
+                    display_label = f"{label} ({col_name}) + {comp_meta.get('label', companion)} ({companion})"
+                else:
+                    display_label = f"{label} ({col_name})"
+                checked = col_name in intent.columns
+                if col_widget.checkbox(display_label, value=checked, key=f"col_{col_name}"):
+                    selected_columns.append(col_name)
+                    if companion:
+                        selected_columns.append(companion)
 
     # --- Filters (editable rows) ---
     st.markdown("**Filters:**")

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from ai_export_builder.models.intent import ExportIntent, FilterItem, FilterOperator
-from ai_export_builder.services.sql_builder import build_query
+from ai_export_builder.services.sql_builder import build_disambiguation_query, build_query
 
 
 class TestBasicQuery:
@@ -126,3 +126,55 @@ class TestRowLimit:
         sql, params = build_query(intent, user_facilities=["ALL"], max_rows=500)
         assert params[-1] == 500
         assert "FETCH NEXT ? ROWS ONLY" in sql
+
+
+class TestDisambiguationQuery:
+    def test_basic_disambiguation(self):
+        sql, params = build_disambiguation_query(
+            view_id="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            text_col="VendorName",
+            id_col="Vendor",
+            like_value="%medline%",
+            user_facilities=["ALL"],
+        )
+        assert "SELECT DISTINCT TOP 50" in sql
+        assert "[VendorName]" in sql
+        assert "[Vendor]" in sql
+        assert "LIKE ?" in sql
+        assert params == ["%medline%"]
+        # Value not in SQL
+        assert "%medline%" not in sql
+
+    def test_disambiguation_with_rls(self):
+        sql, params = build_disambiguation_query(
+            view_id="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            text_col="VendorName",
+            id_col="Vendor",
+            like_value="%stryker%",
+            user_facilities=["FAC_A", "FAC_B"],
+        )
+        assert "[FacilityCode] IN (?, ?)" in sql
+        assert params == ["%stryker%", "FAC_A", "FAC_B"]
+
+    def test_disambiguation_custom_max_rows(self):
+        sql, params = build_disambiguation_query(
+            view_id="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            text_col="CompanyText",
+            id_col="Company",
+            like_value="%monte%",
+            user_facilities=["ALL"],
+            max_rows=10,
+        )
+        assert "TOP 10" in sql
+
+    def test_disambiguation_no_injection(self):
+        """Ensure the LIKE value is parameterized, not interpolated."""
+        sql, params = build_disambiguation_query(
+            view_id="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            text_col="VendorName",
+            id_col="Vendor",
+            like_value="'; DROP TABLE Students;--",
+            user_facilities=["ALL"],
+        )
+        assert "'; DROP TABLE Students;--" not in sql
+        assert "'; DROP TABLE Students;--" in params

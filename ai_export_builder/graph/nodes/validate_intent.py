@@ -7,8 +7,8 @@ import re
 from typing import Any
 
 from ai_export_builder.graph.state import ExportState
-from ai_export_builder.models.intent import FilterOperator
-from ai_export_builder.services.registry_loader import load_registry
+from ai_export_builder.models.intent import ExportIntent, FilterOperator
+from ai_export_builder.services.registry_loader import Registry, load_registry
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +87,48 @@ def node_validate_intent(state: ExportState) -> dict[str, Any]:
             logger.warning("  - %s", e)
     else:
         logger.info("node_validate_intent: intent passed validation")
+        # Resolve columns: basic groups + LLM-selected + filter cols + companions
+        _resolve_columns(intent, _registry)
 
     return {"validation_errors": errors}
+
+
+def _resolve_columns(intent: ExportIntent, registry: Registry) -> None:
+    """Deterministically expand intent.columns to include basic group columns,
+    filter columns, and companion (text↔ID) columns. Mutates intent in place."""
+    view_id = intent.selected_view
+    basic_cols = registry.get_basic_columns(view_id)
+
+    # Ordered set: basic first, then LLM-selected, then filter-added
+    seen: set[str] = set()
+    resolved: list[str] = []
+
+    def _add(col: str) -> None:
+        if col not in seen:
+            seen.add(col)
+            resolved.append(col)
+
+    # 1. Always include basic group columns
+    for c in basic_cols:
+        _add(c)
+
+    # 2. Add LLM-selected columns (may include enrichment cols)
+    for c in intent.columns:
+        _add(c)
+
+    # 3. Add filter columns to output
+    for f in intent.filters:
+        _add(f.column)
+
+    # 4. Add companion columns for all currently selected columns
+    snapshot = list(resolved)
+    for c in snapshot:
+        companion = registry.get_companion_column(view_id, c)
+        if companion:
+            _add(companion)
+
+    intent.columns = resolved
+    logger.info("_resolve_columns: resolved %d columns for %s", len(resolved), view_id)
 
 
 def _is_valid_date_string(val: str) -> bool:

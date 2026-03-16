@@ -29,8 +29,12 @@ class ExportState(TypedDict, total=False):
     # Orchestration
     intent: ExportIntent | None
     validation_errors: list[str]
-    status: str  # parsing | pending_approval | executing | completed | failed
+    status: str  # parsing | pending_approval | disambiguating | executing | completed | failed
     retry_count: int  # max 2 retries before surfacing errors
+
+    # Disambiguation
+    disambiguation_needed: bool
+    disambiguation_results: list[dict[str, Any]]  # [{column, companion, matches: [{text, id}]}]
 
     # Context injected at the start of each run
     temporal_context: TemporalContext

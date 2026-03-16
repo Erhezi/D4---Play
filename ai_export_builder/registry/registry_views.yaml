@@ -1,73 +1,160 @@
 # Registry of Views
 
+# this dictate what 'information to be exposed' to user/AI interaction. 
+# the final output could be configured to allow 'exporting on all available columns'
+# but for registry, we intentionally only list out the key business element that we think are most relevant and useful for data retrival.
+
 # views are the main entry point for the app to understand what data is available, where it is, and how to connect to it.
 # each view represents a specific dataset that users can query against, and contains metadata about the view
   - view_id: vw_PO_PURCHASEORDER_LINE_WITH_PCAT
     database: PRIME  # <--- Router uses this to pick the connection
     display_name: "PO Line Detail (Premier Category Enriched)"
     description: "Detailed PO line items merged with Premier GPO categories and standardized manufacturer names."
+    field_groups:
+      - group_name: "PO Line Details"
+        group_type: "basic" # <-- required fields in any flat output, no matter how filtered, those fields should always be present
+        description: "Core PO line details including when, under which index, to whom, what item, and how much was purchased."
+        columns_included: ["PO", "PurchaseOrderLine",  "POReleaseDate", "Vendor", "VendorName", "VendorItem", "ItemNumber", "ItemType", "ItemDescription", "Quantity", "EnteredBuyUOM", "BuyUnitCost", "CalculateExtendedAmount", "Index", "IndexText", "IndexType", "Company", "CompanyText"]
+      - group_name: "Premier Enrichment"
+        group_type: "enrichment" # <-- optional fields that enrich the dataset with premier data, if user not explicitly ask data element in this field, AI Orchestrator should leave them out
+        description: "Additional fields from Premier that categorize items into GPO categories and provide standardized manufacturer information."
+        columns_included: ["ManufacturerName_Premier", "ParentManufacturerName_Premier", "ManufacturerNumber_Premier", "ContractCategory_Premier", "CommodityCode_Premier", "CcDescription_Premier"]
     sample_questions:
       - "Show me all Stryker purchases from for last month."
       - "What is the total spend for 'Cath Lab' in FY26?"
       - "List all items under the 'COMPUTER MOUSE' Premier category."
-      - "Export all Medline glove spend including manufacturer part numbers, vendor catalog number and vendor."
+      - "Export all Medline glove spend including vendor catalog number and vendor."
     columns:
     # --- Identity (Saved as Text/String) ---
     - name: PO
       label: "PO Number"
+      concept: system generated unique identifier string (10-digit) for each purchase order.
       type: string
       aliases: ["po #", "order number"]
+      accept_list_input: true # <-- allow user to submit a list of PO numbers for filtering, input can be pure text string that is comma separated, or a .csv or .xlsx with a single column of PO numbers in query.
+      forced_in_output: true
     - name: PurchaseOrderLine
-      label: "PO Line"
+      label: "Purchase Order Line"
+      concept: system generated unique identifier for each line item at PO creation. we have anothers field called "POLine" which is a sequential line number for each PO, also unique within each PO but will be re-indexed if lines are deleted.
       type: string
       aliases: ["line #"]
+      forced_in_output: true
 
     # --- Facility & Dept (String) ---
     - name: CompanyText
-      concept: facility
+      label: "Company"
+      concept: ERP level legal entity that is responsible for the transaction, top level accounting entity for financial reporting.
       type: string
+      aliases: ["entity", "facility", "company"]
+    - name: Company
+      label: "Company ID"
+      concept: the ID field for the CompanyText (4-digits), power user can sometimes direct refer to this field such as 'pull spend for company 3000'.
+      type: string
+      required_for_field_mapping: "CompanyText" #<- this means the AI Orchestrator must include this field in the output if "CompanyText" is selected, even if user doesn't explicitly ask for it, because it's required for joins with other views.
+
     - name: CostCenterText
-      concept: cost_center
+      label: "Cost Center"
+      concept: cost center (normally represents department within the facility) associated with the PO line, purchase to inventory locations are marked as 'INVENTORY - [Location]'.
       type: string
+      aliases: ["department", "dept", "cost center"]
+    - name: CostCenter
+      label: "Cost Center ID"
+      concept: the ID field for the CostCenterText, power user can sometimes direct refer to this field such as 'pull spend for cost center 12345'.
+      type: string
+      required_for_field_mapping: "CostCenterText" #<- this means the AI Orchestrator must include this field in the output if "CostCenterText" is selected, even if user doesn't explicitly ask for it, because it's required for joins with other views.
+
     - name: IndexText
-      label: "Security/Dept Name"
+      label: "IndexText"
+      concept: the department or project index associated with the PO line, similar to cost center but contains project level granularity.
       type: string
       aliases: ["index"]
+    - name: Index
+      label: "Index ID"
+      concept: the ID field for the IndexText, power user can sometimes direct refer to this field such as 'pull spend for index 12345108'.
+      type: string
+      required_for_field_mapping: "IndexText" #<- this means the AI Orchestrator must include this field in the output if "IndexText" or is selected, even if user doesn't explicitly ask for it, because it's required for joins with other views.
 
-    # --- Vendor & Manufacturer (String) ---
+    # --- PO Service Code (String) ---
+    - name: ServiceCode
+      label: "PO Service Code"
+      concept: the service code assigned to the PO line, can take value 'Quantity', 'Amount' or 'Not a Service Item'. For PO's marked as 'Quantity' or 'Amount', they likely to be 'blanket PO' for services/subscriptions or recurring purchases.
+      type: string
+      aliases: ["service code", "svc code"]
+
+    # --- Vendor (String) ---
     - name: VendorName
-      concept: vendor
+      concept: the name of the vendor for the PO, it is the provider of the product or service being purchased. Not neccessarily the same as the 'manufacturer' of the item, nor a contracted supplier. User often uses vendor, suppliers, and distributor interchangeably, here they all refer to the same concept of 'VendorName'.
       type: string
       aliases: ["supplier", "distributor"]
-    - name: ManufacturerName_Premier
-      concept: manufacturer
+    - name: Vendor
+      label: "Vendor ID"
+      concept: the ID field for the VendorName, power user can sometimes direct refer to this field such as 'pull spend for vendor 100978'.
       type: string
-    - name: ManufacturerNumber_Premier
-      label: "Mfr Part #"
-      type: string
+      required_for_field_mapping: "VendorName" #<- this means the AI Orchestrator must include this field in the output if "VendorName" is selected, even if user doesn't explicitly ask for it, because it's required for joins with other views.
 
+    # --- Item Identifier (String) ---
+    - name: VendorItem
+      label: "Vendor Item"
+      concept: the vendor side item catalog number, In PO line, Vendor (by ID) + VendorItem create unique item identification and we often treat this as the most reliable source of item-level identification from purchase order perspective.
+      aliases: ["vendor catalog number", "vendor item number", "vendor product code", "vendor SKU", "vendor item #"]
+    - name: ItemType
+      label: "Item Type"
+      concept: the type of the item on the PO line, takes value "Inventoried", "Non Stock", "Special", or "Service".
+      type: string
+      aliases: ["item type"]
+    - name: ItemNumber
+      label: "Item"
+      concept: the item number on the PO line, ONLY use if user confirm they are looking for inventory items. it is a mixture of internal ERP number (6-digits code if ItemType is 'Inventoried' or 'Non Stock'), vendor catalog number (if ItemType is 'Special' but deos not refer to a contract line), a [internal 4-digits code] - [vendor catalog number] (if ItemType is 'Special' and refer to a contract line), or any short free text entered at PO line creation.
+      type: string
+      aliases: ["infor item number", "infor item #", "item #"]
+    
     # --- Item Description (String) ---
     - name: ItemDescription
       label: "Item Description"
+      concept: text description of the item on the PO line, usually a free text field entered at PO line creation. Information rich but can be inconsistent in naming and formmating, contains abbreviations.
       type: string
       aliases: ["item", "product", "description", "desc"]
 
     # --- Financials (Numeric/Money) ---
-    - name: Quantity
-      label: "Qty"
-      type: numeric
     - name: VendorBuyUnitCost
       label: "Unit Price"
+      concept: the unit cost of the item on the PO line, this is usually the unit price per "EnteredBuyUOM". 
+      aliases: ["unit cost", "unit price"]
       type: numeric
     - name: CalculateExtendedAmount
       label: "Total Spend"
+      concept: the total cost for the PO line, calculated as Quantity multiplied by VendorBuyUnitCost. If the PO's "Service Code" is "Quantity" or "Amount", summing up the extended amount across all lines for a given PO will only reflects the already used portion of that PO, not the total committed amount.
+      aliases: ["amount", "cost", "spend", "total", "total spend", "total volumne", "po spend", "po total"]
       type: numeric
-      aliases: ["amount", "cost", "spend"]
 
     # --- Dates (Date) ---
     - name: POReleaseDate
-      label: "Order Date"
+      label: "PO ReleaseDate Date"
+      concept: date the PO was released from ERP to outside world, which is the primary timestamp we will use for temporal context and date filtering.
+      aliases: ["release date", "PO date", "order date"]
+      not_aliases: ["invoice date", "receipt date", "PO created date"]
       type: date
+
+    # --- Premier Enrichment Fields (String) ---
+    - name: ContractCategory_Premier
+      label: "Premier Contract Category"
+      concept: the category assigned by Premier to the item on the PO line based on their contract categorization, can be used to quickly identify if an item is contracted by Premier and under which category it falls.
+      type: string
+      aliases: ["Premier category", "contract category"]
+      group: "Premier Enrichment"
+    - name: CcDescription_Premier
+      label: "Premier Commodity (UNSPSC) Description"
+      concept: the commodity description assigned by Premier to the item on the PO line based on their datasets, can be used to quickly identify if an item is under which commodity description it falls by Premier's definition.
+      type: string
+      aliases: ["Premier commodity description", "commodity description", "UNSPSC description"]
+      group: "Premier Enrichment"
+    - name: CommodityCode_Premier
+      label: "Premier Commodity (UNSPSC) Code"
+      concept: the commodity (UNSPSC) code (8-digit) assigned by Premier to the item on the PO line based on their datasets, can be used to quickly identify if an item is under which commodity code it falls by Premier's definition.
+      type: string
+      aliases: ["Premier commodity code", "commodity code"]
+      group: "Premier Enrichment"
+      required_for_field_mapping: "CcDescription_Premier" #<- this means the AI Orchestrator must include this field in the output if "CcDescription_Premier" is selected, even if user doesn't explicitly ask for it, because it's required for joins with other views.
 
 
   - view_id: vw_invoice_detail

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-5-mini"
 
     # SQL Server
     db_driver: str = "{ODBC Driver 17 for SQL Server}"

@@ -3,7 +3,9 @@
 Graph flow:
   parse_intent → validate_intent → (errors & retries < 2 → loop back)
                                  → (errors & retries >= 2 → human_review)
-                                 → (no errors → human_review)
+                                 → (no errors → disambiguate)
+  disambiguate → (disambiguation_needed → disambiguation_review (HITL) → human_review)
+              → (no disambiguation → human_review)
   human_review (interrupt) → execute_export
 """
 
@@ -14,6 +16,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from ai_export_builder.graph.nodes.disambiguate import node_disambiguate
 from ai_export_builder.graph.nodes.execute_export import node_execute_export
 from ai_export_builder.graph.nodes.parse_intent import node_parse_intent
 from ai_export_builder.graph.nodes.validate_intent import node_validate_intent
@@ -31,7 +34,7 @@ MAX_RETRIES = 2
 def _after_validate(state: ExportState) -> str:
     """Decide the next step after validation.
 
-    - If no errors → go to human_review (HITL breakpoint).
+    - If no errors → go to disambiguate.
     - If errors and retries remain → loop back to parse_intent.
     - If errors and retries exhausted → surface to human_review with errors.
     """
@@ -39,8 +42,8 @@ def _after_validate(state: ExportState) -> str:
     retry = state.get("retry_count", 0)
 
     if not errors:
-        logger.info("Validation passed — routing to human_review")
-        return "human_review"
+        logger.info("Validation passed — routing to disambiguate")
+        return "disambiguate"
 
     if retry < MAX_RETRIES:
         logger.info("Validation failed (retry %d/%d) — looping back to parse_intent",
@@ -52,6 +55,16 @@ def _after_validate(state: ExportState) -> str:
     return "human_review"
 
 
+def _after_disambiguate(state: ExportState) -> str:
+    """Route after disambiguation: if previews are available go to HITL review,
+    otherwise skip straight to human_review."""
+    if state.get("disambiguation_needed"):
+        logger.info("Disambiguation needed — routing to disambiguation_review")
+        return "disambiguation_review"
+    logger.info("No disambiguation needed — routing to human_review")
+    return "human_review"
+
+
 def _increment_retry(state: ExportState) -> dict[str, Any]:
     """Bump retry counter before re-entering parse_intent."""
     return {"retry_count": state.get("retry_count", 0) + 1}
@@ -60,6 +73,11 @@ def _increment_retry(state: ExportState) -> dict[str, Any]:
 def _mark_pending_approval(state: ExportState) -> dict[str, Any]:
     """Set status to pending_approval before HITL breakpoint."""
     return {"status": "pending_approval"}
+
+
+def _mark_pending_disambiguation(state: ExportState) -> dict[str, Any]:
+    """Set status to pending_disambiguation before HITL breakpoint."""
+    return {"status": "pending_disambiguation"}
 
 
 def _mark_executing(state: ExportState) -> dict[str, Any]:
@@ -79,6 +97,8 @@ def build_graph() -> StateGraph:
     graph.add_node("parse_intent", node_parse_intent)
     graph.add_node("validate_intent", node_validate_intent)
     graph.add_node("increment_retry", _increment_retry)
+    graph.add_node("disambiguate", node_disambiguate)
+    graph.add_node("disambiguation_review", _mark_pending_disambiguation)
     graph.add_node("human_review", _mark_pending_approval)
     graph.add_node("pre_execute", _mark_executing)
     graph.add_node("execute_export", node_execute_export)
@@ -92,12 +112,26 @@ def build_graph() -> StateGraph:
         "validate_intent",
         _after_validate,
         {
+            "disambiguate": "disambiguate",
             "human_review": "human_review",
             "retry_parse": "increment_retry",
         },
     )
 
     graph.add_edge("increment_retry", "parse_intent")
+
+    # Conditional routing after disambiguation
+    graph.add_conditional_edges(
+        "disambiguate",
+        _after_disambiguate,
+        {
+            "disambiguation_review": "disambiguation_review",
+            "human_review": "human_review",
+        },
+    )
+
+    # After disambiguation_review (HITL interrupt) → human_review
+    graph.add_edge("disambiguation_review", "human_review")
 
     # After human_review (HITL interrupt happens here) → execute
     graph.add_edge("human_review", "pre_execute")
@@ -108,12 +142,12 @@ def build_graph() -> StateGraph:
 
 
 def compile_graph():
-    """Build and compile the graph with an interrupt before human_review's output is consumed.
+    """Build and compile the graph with interrupts before disambiguation and execution.
 
-    The interrupt happens BEFORE 'pre_execute', meaning the graph pauses
-    after `human_review` sets status='pending_approval'. The Streamlit UI
-    will show the verification card, then resume the graph to continue
-    into execute_export.
+    Two HITL interrupt points:
+    1. Before 'disambiguation_review' output is consumed — shows the SELECT DISTINCT
+       preview so users can confirm which entities to include.
+    2. Before 'pre_execute' — shows the verification card for final column/filter review.
     """
     graph = build_graph()
-    return graph.compile(interrupt_before=["pre_execute"])
+    return graph.compile(interrupt_before=["disambiguation_review", "pre_execute"])

@@ -26,11 +26,23 @@ registered view.
 
 ## Rules
 1. Pick exactly ONE view from the registry below.
-2. Select only columns that exist in that view. Default to ALL columns if
-   the user does not specify.
+2. Column selection:
+   - Do NOT include columns from "basic" field groups in your `columns` list.
+     Basic columns are ALWAYS auto-included in every export by the system.
+   - Only list columns from "enrichment" field groups or other columns that the
+     user explicitly asks for.
+   - If the user mentions a group by name (e.g. "include Premier data"), list
+     all columns from that enrichment group.
+   - Default to an empty `columns` list if the user does not request anything
+     beyond what the basic group already provides.
 3. Build filters using only columns that exist in the view and operators:
    eq, neq, gt, gte, lt, lte, like, in, between.
-   - Use 'like' with '%' wildcards for partial string matches (e.g. value: "%mask%" or "Stryker%").
+   - Use 'like' with '%' wildcards for partial string matches
+     (e.g. value: "%mask%" or "%Stryker%").
+   - For text columns that have a companion ID field (see "companion:" in the
+     schema), prefer using 'like' with wildcards so the system can show the
+     user a preview of matching entities for confirmation.
+   - Any column used in a filter is automatically added to the output.
 4. For date filters, resolve relative expressions (e.g. "last quarter",
    "YTD") using the temporal context provided.
 5. NEVER produce JOINs, GROUP BY, or aggregations.
