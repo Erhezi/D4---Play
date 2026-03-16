@@ -30,6 +30,7 @@ registered view.
    the user does not specify.
 3. Build filters using only columns that exist in the view and operators:
    eq, neq, gt, gte, lt, lte, like, in, between.
+   - Use 'like' with '%' wildcards for partial string matches (e.g. value: "%mask%" or "Stryker%").
 4. For date filters, resolve relative expressions (e.g. "last quarter",
    "YTD") using the temporal context provided.
 5. NEVER produce JOINs, GROUP BY, or aggregations.

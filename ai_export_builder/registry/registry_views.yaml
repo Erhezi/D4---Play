@@ -46,6 +46,12 @@
       label: "Mfr Part #"
       type: string
 
+    # --- Item Description (String) ---
+    - name: ItemDescription
+      label: "Item Description"
+      type: string
+      aliases: ["item", "product", "description", "desc"]
+
     # --- Financials (Numeric/Money) ---
     - name: Quantity
       label: "Qty"
