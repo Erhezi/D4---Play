@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -46,6 +47,8 @@ class Settings(BaseSettings):
     db_username: str = ""
     db_password: str = ""
     db_timeout: int = 30
+    prime_db_url: str = ""
+    scs_db_url: str = ""
 
     # App
     daily_request_limit: int = 10
@@ -74,6 +77,10 @@ class Settings(BaseSettings):
         else:
             base += "Trusted_Connection=yes;"
         return base
+
+    def get_named_connection_string(self, env_var: str) -> str:
+        """Return a named database connection string from env or .env-backed settings."""
+        return os.environ.get(env_var, "") or getattr(self, env_var.lower(), "")
 
 
 settings = Settings()

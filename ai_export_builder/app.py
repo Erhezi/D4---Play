@@ -294,6 +294,16 @@ if user_input:
                 st.session_state.awaiting_confirmation = True
                 st.rerun()
 
+            elif status == "disambiguating":
+                # Graph paused at disambiguation HITL breakpoint
+                add_message(
+                    "assistant",
+                    "I found some ambiguous terms in your request. "
+                    "Please review the matching entities below to confirm your selection.",
+                )
+                st.session_state.awaiting_disambiguation = True
+                st.rerun()
+
             elif status == "failed":
                 errors = graph_state.get("validation_errors", [])
                 err_msg = graph_state.get("error_message", "")

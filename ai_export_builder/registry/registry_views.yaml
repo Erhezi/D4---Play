@@ -15,7 +15,7 @@
       - group_name: "PO Line Details"
         group_type: "basic" # <-- required fields in any flat output, no matter how filtered, those fields should always be present
         description: "Core PO line details including when, under which index, to whom, what item, and how much was purchased."
-        columns_included: ["PO", "PurchaseOrderLine",  "POReleaseDate", "Vendor", "VendorName", "VendorItem", "ItemNumber", "ItemType", "ItemDescription", "Quantity", "EnteredBuyUOM", "BuyUnitCost", "CalculateExtendedAmount", "Index", "IndexText", "IndexType", "Company", "CompanyText"]
+        columns_included: ["PO", "PurchaseOrderLine",  "POReleaseDate", "Vendor", "VendorName", "VendorItem", "Item", "ItemType", "ItemDescription", "Quantity", "EnteredBuyUOM", "VendorBuyUnitCost", "CalculateExtendedAmount", "Index", "IndexText", "IndexType", "Company", "CompanyText"]
       - group_name: "Premier Enrichment"
         group_type: "enrichment" # <-- optional fields that enrich the dataset with premier data, if user not explicitly ask data element in this field, AI Orchestrator should leave them out
         description: "Additional fields from Premier that categorize items into GPO categories and provide standardized manufacturer information."
@@ -103,7 +103,7 @@
       concept: the type of the item on the PO line, takes value "Inventoried", "Non Stock", "Special", or "Service".
       type: string
       aliases: ["item type"]
-    - name: ItemNumber
+    - name: Item
       label: "Item"
       concept: the item number on the PO line, ONLY use if user confirm they are looking for inventory items. it is a mixture of internal ERP number (6-digits code if ItemType is 'Inventoried' or 'Non Stock'), vendor catalog number (if ItemType is 'Special' but deos not refer to a contract line), a [internal 4-digits code] - [vendor catalog number] (if ItemType is 'Special' and refer to a contract line), or any short free text entered at PO line creation.
       type: string

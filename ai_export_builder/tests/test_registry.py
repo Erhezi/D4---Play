@@ -60,7 +60,7 @@ class TestViewLookups:
     def test_all_view_ids(self, registry):
         ids = registry.all_view_ids()
         assert "vw_PO_PURCHASEORDER_LINE_WITH_PCAT" in ids
-        assert "vw_invoice_detail" in ids
+        assert "vw_MainSavings" in ids
 
     def test_get_all_columns(self, registry):
         cols = registry.get_all_columns("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
@@ -98,7 +98,7 @@ class TestViewLookups:
 class TestConnectionRouting:
     def test_get_database_key(self, registry):
         assert registry.get_database_key("vw_PO_PURCHASEORDER_LINE_WITH_PCAT") == "PRIME"
-        assert registry.get_database_key("vw_invoice_detail") == "SCS"
+        assert registry.get_database_key("vw_MainSavings") == "SCS"
 
     def test_get_connection_config(self, registry):
         config = registry.get_connection_config("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
@@ -110,10 +110,24 @@ class TestConnectionRouting:
             conn_str = registry.get_connection_string("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
             assert conn_str == "Driver=test;Server=localhost"
 
+    def test_get_connection_string_reads_settings_fallback(self, registry, monkeypatch):
+        with patch.dict(os.environ, {}, clear=True):
+            monkeypatch.setattr(
+                "ai_export_builder.config.settings.prime_db_url",
+                "Driver=test;Server=from-settings",
+            )
+            conn_str = registry.get_connection_string("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
+            assert conn_str == "Driver=test;Server=from-settings"
+
     def test_get_connection_string_missing_env_raises(self, registry):
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(EnvironmentError, match="PRIME_DB_URL"):
-                registry.get_connection_string("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
+            with patch.object(
+                __import__("ai_export_builder.config", fromlist=["settings"]).settings,
+                "prime_db_url",
+                "",
+            ):
+                with pytest.raises(EnvironmentError, match="PRIME_DB_URL"):
+                    registry.get_connection_string("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
 
     def test_get_connection_string_unknown_view_raises(self, registry):
         with pytest.raises(KeyError, match="No connection config"):

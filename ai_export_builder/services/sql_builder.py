@@ -55,7 +55,10 @@ def build_query(
             ctx["placeholders"] = ", ".join("?" for _ in values)
             params.extend(values)
         elif f.operator == FilterOperator.like:
-            params.append(f.value)
+            raw = f.value if isinstance(f.value, str) else str(f.value)
+            # Strip any existing wildcards then wrap for partial match
+            raw = raw.strip("%")
+            params.append(f"%{raw}%")
         else:
             ctx["sql_op"] = _OP_MAP.get(f.operator, "=")
             params.append(f.value)

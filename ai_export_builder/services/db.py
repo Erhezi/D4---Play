@@ -1,12 +1,13 @@
-"""Database service — pyodbc connection and parameterized query execution."""
+"""Database service — SQLAlchemy engine and parameterized query execution."""
 
 from __future__ import annotations
 
 import logging
+import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
-import pyodbc
+from sqlalchemy import create_engine, text
 
 from ai_export_builder.config import settings
 
@@ -16,19 +17,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_connection() -> pyodbc.Connection:
-    """Open a new pyodbc connection using the default configured connection string."""
-    return pyodbc.connect(settings.connection_string, timeout=settings.db_timeout)
+def _build_engine_url(conn_str: str) -> str:
+    """Convert an ODBC connection string to a SQLAlchemy URL."""
+    return f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(conn_str)}"
 
 
-def get_connection_for_view(view_id: str, registry: "Registry") -> pyodbc.Connection:
-    """Open a pyodbc connection routed to the database that owns *view_id*.
+def _positional_to_named(sql: str, params: list[Any]) -> tuple[str, dict[str, Any]]:
+    """Replace positional ``?`` placeholders with ``:p0, :p1, …`` named params.
 
-    The connection string is read from the environment variable specified in
-    connection.yaml (``connection_string_env``).
+    Returns (new_sql, params_dict).
     """
-    conn_str = registry.get_connection_string(view_id)
-    return pyodbc.connect(conn_str, timeout=settings.db_timeout)
+    named: dict[str, Any] = {}
+    idx = 0
+    parts: list[str] = []
+    for ch in sql:
+        if ch == "?":
+            key = f"p{idx}"
+            parts.append(f":{key}")
+            named[key] = params[idx] if idx < len(params) else None
+            idx += 1
+        else:
+            parts.append(ch)
+    return "".join(parts), named
 
 
 def execute_query(sql: str, params: list[Any] | None = None) -> pd.DataFrame:
@@ -39,13 +49,15 @@ def execute_query(sql: str, params: list[Any] | None = None) -> pd.DataFrame:
     """
     params = params or []
     logger.info("Executing query (%d params)", len(params))
-    conn = get_connection()
+    engine = create_engine(_build_engine_url(settings.connection_string))
+    named_sql, named_params = _positional_to_named(sql, params)
     try:
-        df = pd.read_sql(sql, conn, params=params)
+        with engine.connect() as conn:
+            df = pd.read_sql(text(named_sql), conn, params=named_params)
         logger.info("Query returned %d rows", len(df))
         return df
     finally:
-        conn.close()
+        engine.dispose()
 
 
 def execute_query_for_view(
@@ -66,10 +78,13 @@ def execute_query_for_view(
         registry.get_database_key(view_id),
         len(params),
     )
-    conn = get_connection_for_view(view_id, registry)
+    conn_str = registry.get_connection_string(view_id)
+    engine = create_engine(_build_engine_url(conn_str))
+    named_sql, named_params = _positional_to_named(sql, params)
     try:
-        df = pd.read_sql(sql, conn, params=params)
+        with engine.connect() as conn:
+            df = pd.read_sql(text(named_sql), conn, params=named_params)
         logger.info("Query returned %d rows", len(df))
         return df
     finally:
-        conn.close()
+        engine.dispose()

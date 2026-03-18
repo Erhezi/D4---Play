@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from ai_export_builder.config import settings
 
 
 _REGISTRY_DIR = Path(__file__).resolve().parent.parent / "registry"
@@ -81,13 +82,14 @@ class Registry:
         """Resolve the connection string for a view from its env variable.
 
         Raises KeyError if the view or its connection is not found.
-        Raises EnvironmentError if the env variable is not set.
+        Raises EnvironmentError if the env variable is not set in either the
+        process environment or the loaded .env-backed application settings.
         """
         config = self.get_connection_config(view_id)
         if not config:
             raise KeyError(f"No connection config found for view '{view_id}'")
         env_var = config["connection_string_env"]
-        conn_str = os.environ.get(env_var)
+        conn_str = settings.get_named_connection_string(env_var)
         if not conn_str:
             raise EnvironmentError(
                 f"Environment variable '{env_var}' is not set "

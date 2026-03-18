@@ -46,8 +46,9 @@ def node_disambiguate(state: ExportState) -> dict[str, Any]:
 
         # For eq operator, wrap value in wildcards for the preview
         like_value = f.value if isinstance(f.value, str) else str(f.value)
-        if f.operator == FilterOperator.eq:
-            like_value = f"%{like_value}%"
+        # Strip any existing wildcards then wrap for partial match
+        like_value = like_value.strip("%")
+        like_value = f"%{like_value}%"
 
         try:
             sql, params = build_disambiguation_query(

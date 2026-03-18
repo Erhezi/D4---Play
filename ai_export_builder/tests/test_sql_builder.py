@@ -92,7 +92,7 @@ class TestParameterizedFilters:
             selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
             columns=["VendorName"],
             filters=[
-                FilterItem(column="VendorName", operator=FilterOperator.like, value="%glove%"),
+                FilterItem(column="VendorName", operator=FilterOperator.like, value="glove"),
             ],
         )
         sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)

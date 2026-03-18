@@ -38,10 +38,11 @@ registered view.
      beyond what the basic group already provides.
 3. Build filters using only columns that exist in the view and operators:
    eq, neq, gt, gte, lt, lte, like, in, between.
-   - Use 'like' with '%' wildcards for partial string matches
-     (e.g. value: "%mask%" or "%Stryker%").
+   - For 'like' filters, provide ONLY the search term without '%' wildcards.
+     The system will automatically wrap the value with '%' for matching.
+     Example: use value "mask" (NOT "%mask%").
    - For text columns that have a companion ID field (see "companion:" in the
-     schema), prefer using 'like' with wildcards so the system can show the
+     schema), prefer using 'like' so the system can show the
      user a preview of matching entities for confirmation.
    - Any column used in a filter is automatically added to the output.
 4. For date filters, resolve relative expressions (e.g. "last quarter",
@@ -173,6 +174,8 @@ def node_parse_intent(state: ExportState) -> dict[str, Any]:
             )
 
         raw = response.output_text
+        print(f"\n{'='*60}\nLLM returned JSON:\n{raw}\n{'='*60}\n")
+        logger.info("LLM returned JSON: %s", raw)
         data = json.loads(raw)
         intent = ExportIntent(**data)
 

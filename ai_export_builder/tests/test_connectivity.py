@@ -90,12 +90,12 @@ def _view_ids() -> list[str]:
 
 
 def _has_connection_env(view_id: str) -> bool:
-    """Return True if the env var for this view's database is set."""
+    """Return True if the connection string is available via env or .env settings."""
     config = _registry.get_connection_config(view_id)
     if not config:
         return False
     env_var = config.get("connection_string_env", "")
-    return bool(os.environ.get(env_var))
+    return bool(settings.get_named_connection_string(env_var))
 
 
 @pytest.mark.integration

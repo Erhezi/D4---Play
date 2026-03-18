@@ -9,8 +9,8 @@ def test_build_query_like_operator():
         selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
         columns=["VendorName", "ItemDescription"],
         filters=[
-            FilterItem(column="VendorName", operator=FilterOperator.like, value="%Medline%"),
-            FilterItem(column="ItemDescription", operator=FilterOperator.like, value="%mask%")
+            FilterItem(column="VendorName", operator=FilterOperator.like, value="Medline"),
+            FilterItem(column="ItemDescription", operator=FilterOperator.like, value="mask")
         ]
     )
     
@@ -21,7 +21,7 @@ def test_build_query_like_operator():
     assert "[VendorName] LIKE ?" in sql
     assert "[ItemDescription] LIKE ?" in sql
     
-    # assert params contains the wildcards
+    # assert params contains auto-wrapped wildcards
     assert "%Medline%" in params
     assert "%mask%" in params
     
@@ -33,7 +33,7 @@ def test_build_query_like_operator_with_rls():
         selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
         columns=["VendorName"],
         filters=[
-            FilterItem(column="VendorName", operator=FilterOperator.like, value="Stryker%")
+            FilterItem(column="VendorName", operator=FilterOperator.like, value="Stryker")
         ]
     )
     
@@ -41,6 +41,6 @@ def test_build_query_like_operator_with_rls():
     sql, params = build_query(intent, user_facilities=["FAC1", "FAC2"])
     
     assert "AND [FacilityCode] IN (?, ?)" in sql
-    assert "Stryker%" in params
+    assert "%Stryker%" in params
     assert "FAC1" in params
     assert "FAC2" in params

@@ -147,9 +147,12 @@ def render_verification_card(
                 current_val = (
                     ", ".join(f.value) if isinstance(f.value, list) else str(f.value)
                 )
+                # Strip '%' wrappers for LIKE filters — they are added automatically in the query
+                if f.operator == FilterOperator.like:
+                    current_val = current_val.strip("%")
                 new_val_str = fcol3.text_input(
                     "Value(s)", value=current_val, key=f"filter_val_{i}",
-                    help="For 'between': start, end. For 'in': comma-separated values.",
+                    help="For 'between': start, end. For 'in': comma-separated values. For 'like': search term (% added automatically).",
                 )
 
                 # Parse the value back
