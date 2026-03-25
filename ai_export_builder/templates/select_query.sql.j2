@@ -12,7 +12,11 @@ WHERE 1=1
 {% elif f.operator == "in" %}
     AND [{{ f.column }}] IN ({{ f.placeholders }})
 {% elif f.operator == "like" %}
+{% if f.or_group is defined and f.or_group %}
+    AND ({% for i in range(f.placeholders_count) %}[{{ f.column }}] LIKE ?{% if not loop.last %} OR {% endif %}{% endfor %})
+{% else %}
     AND [{{ f.column }}] LIKE ?
+{% endif %}
 {% elif f.operator == "neq" %}
     AND [{{ f.column }}] <> ?
 {% else %}
@@ -26,5 +30,9 @@ WHERE 1=1
     AND [{{ rls_column }}] IN ({{ rls_placeholders }})
 {% endif %}
 {% endif %}
+{% if sort_columns %}
+ORDER BY {% for s in sort_columns %}[{{ s.column }}] {{ s.direction }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% else %}
 ORDER BY 1
+{% endif %}
 OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY

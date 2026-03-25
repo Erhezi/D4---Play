@@ -114,3 +114,74 @@ class TestParseIntent:
         assert result["intent"] is None
         assert len(result["validation_errors"]) == 1
         assert "OPENAI_CA_BUNDLE" in result["validation_errors"][0]
+
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_successful_parse_sets_previous_intent(self, mock_openai_cls):
+        """After a successful parse, previous_intent should be set."""
+        mock_resp = MagicMock()
+        mock_resp.output_text = _MOCK_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
+
+        state = _make_state()
+        result = node_parse_intent(state)
+
+        assert result["previous_intent"] is not None
+        assert result["previous_intent"].selected_view == "vw_PO_PURCHASEORDER_LINE_WITH_PCAT"
+
+
+class TestDeltaParsing:
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_delta_context_included_in_prompt(self, mock_openai_cls):
+        """When previous_intent exists, it should be included in the user message."""
+        from ai_export_builder.models.intent import ExportIntent
+
+        mock_resp = MagicMock()
+        mock_resp.output_text = _MOCK_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
+
+        prev_intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+        )
+        state = _make_state("Also add the amount column")
+        state["previous_intent"] = prev_intent
+
+        node_parse_intent(state)
+
+        call_args = mock_openai_cls.return_value.responses.create.call_args
+        messages = call_args[1]["input"]
+        user_msg = messages[1]["content"]
+        assert "CURRENT EXPORT STATE" in user_msg
+        assert "REFINEMENT REQUEST" in user_msg
+        assert "VendorName" in user_msg
+
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_no_delta_context_on_first_run(self, mock_openai_cls):
+        """Without previous_intent, no delta context should be in the prompt."""
+        mock_resp = MagicMock()
+        mock_resp.output_text = _MOCK_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
+
+        state = _make_state()
+        node_parse_intent(state)
+
+        call_args = mock_openai_cls.return_value.responses.create.call_args
+        messages = call_args[1]["input"]
+        user_msg = messages[1]["content"]
+        assert "CURRENT EXPORT STATE" not in user_msg
+
+    @patch("ai_export_builder.graph.nodes.parse_intent.OpenAI")
+    def test_sort_by_in_json_schema_prompt(self, mock_openai_cls):
+        """The system prompt should include sort_by in the JSON schema."""
+        mock_resp = MagicMock()
+        mock_resp.output_text = _MOCK_LLM_RESPONSE
+        mock_openai_cls.return_value.responses.create.return_value = mock_resp
+
+        state = _make_state()
+        node_parse_intent(state)
+
+        call_args = mock_openai_cls.return_value.responses.create.call_args
+        messages = call_args[1]["input"]
+        system_msg = messages[0]["content"]
+        assert "sort_by" in system_msg

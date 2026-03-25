@@ -4,9 +4,9 @@ databases:
     connection_string_env: "PRIME_DB_URL"
     type: "sql_server"
     database: "PRIME"
-    schema: "[DM_MONTYNT\\dli2]"
+    schema: "[DM_MONTYNT\\dli2]" # no need in v2.0, as schema is specified at view level
   SCS:
     connection_string_env: "SCS_DB_URL"
     type: "sql_server"
     database: "PBI"
-    schema: "SCSSaving"
+    schema: "SCSSaving" # no need in v2.0

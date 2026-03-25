@@ -87,16 +87,29 @@ def node_validate_intent(state: ExportState) -> dict[str, Any]:
             logger.warning("  - %s", e)
     else:
         logger.info("node_validate_intent: intent passed validation")
-        # Resolve columns: basic groups + LLM-selected + filter cols + companions
+        # Resolve columns: basic groups + LLM-selected + filter cols + concept groups
         _resolve_columns(intent, _registry)
+
+    # 6. Sort-by columns must exist in the view
+    for s in intent.sort_by:
+        if s.column not in valid_columns:
+            errors.append(
+                f"Sort column '{s.column}' does not exist in view '{intent.selected_view}'."
+            )
 
     return {"validation_errors": errors}
 
 
 def _resolve_columns(intent: ExportIntent, registry: Registry) -> None:
     """Deterministically expand intent.columns to include basic group columns,
-    filter columns, and companion (text↔ID) columns. Mutates intent in place."""
+    filter columns, and concept-group sibling columns. Mutates intent in place.
+
+    Concept-group expansion supersedes the legacy companion-pair logic:
+    if a column has a ``concept_id``, **all** columns sharing that concept_id
+    are auto-included (e.g. selecting ``VendorName`` also pulls in ``Vendor``).
+    """
     view_id = intent.selected_view
+
     basic_cols = registry.get_basic_columns(view_id)
 
     # Ordered set: basic first, then LLM-selected, then filter-added
@@ -120,12 +133,14 @@ def _resolve_columns(intent: ExportIntent, registry: Registry) -> None:
     for f in intent.filters:
         _add(f.column)
 
-    # 4. Add companion columns for all currently selected columns
+    # 4. Concept-group expansion: for every column selected so far,
+    #    include all sibling columns that share the same concept_id.
     snapshot = list(resolved)
     for c in snapshot:
-        companion = registry.get_companion_column(view_id, c)
-        if companion:
-            _add(companion)
+        concept_id = registry.get_column_concept_id(view_id, c)
+        if concept_id:
+            for sibling in registry.get_concept_group(view_id, concept_id):
+                _add(sibling)
 
     intent.columns = resolved
     logger.info("_resolve_columns: resolved %d columns for %s", len(resolved), view_id)

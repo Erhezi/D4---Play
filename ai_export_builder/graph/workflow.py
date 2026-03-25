@@ -1,11 +1,14 @@
 """LangGraph workflow definition for the Export Builder.
 
 Graph flow:
-  parse_intent → validate_intent → (errors & retries < 2 → loop back)
-                                 → (errors & retries >= 2 → human_review)
-                                 → (no errors → disambiguate)
-  disambiguate → (disambiguation_needed → disambiguation_review (HITL) → human_review)
-              → (no disambiguation → human_review)
+  guardrail → orchestrator → (guardrail blocked → END)
+                            → (refinement limit → reset_signal → END)
+                            → parse_intent → validate_intent
+                              → (errors & retries < 2 → loop back)
+                              → (errors & retries >= 2 → human_review)
+                              → (no errors → disambiguate)
+  disambiguate → (disambiguation_needed → disambiguation_review (HITL))
+              → hydrate_preview → human_review
   human_review (interrupt) → execute_export
 """
 
@@ -18,7 +21,11 @@ from langgraph.graph import END, StateGraph
 
 from ai_export_builder.graph.nodes.disambiguate import node_disambiguate
 from ai_export_builder.graph.nodes.execute_export import node_execute_export
+from ai_export_builder.graph.nodes.guardrail import node_guardrail
+from ai_export_builder.graph.nodes.hydrate_preview import node_hydrate_preview
+from ai_export_builder.graph.nodes.orchestrator import node_orchestrator
 from ai_export_builder.graph.nodes.parse_intent import node_parse_intent
+from ai_export_builder.graph.nodes.reset_signal import node_reset_signal
 from ai_export_builder.graph.nodes.validate_intent import node_validate_intent
 from ai_export_builder.graph.state import ExportState
 
@@ -30,6 +37,17 @@ MAX_RETRIES = 2
 # ------------------------------------------------------------------
 # Routing functions
 # ------------------------------------------------------------------
+
+def _after_orchestrator(state: ExportState) -> str:
+    """Route after orchestrator: parse, reset, or end (if guardrail blocked)."""
+    status = state.get("status", "")
+    if status == "failed":
+        # Guardrail blocked — go to END
+        return "end"
+    if status == "reset":
+        return "reset_signal"
+    return "parse_intent"
+
 
 def _after_validate(state: ExportState) -> str:
     """Decide the next step after validation.
@@ -57,12 +75,12 @@ def _after_validate(state: ExportState) -> str:
 
 def _after_disambiguate(state: ExportState) -> str:
     """Route after disambiguation: if previews are available go to HITL review,
-    otherwise skip straight to human_review."""
+    otherwise skip straight to hydrate_preview."""
     if state.get("disambiguation_needed"):
         logger.info("Disambiguation needed — routing to disambiguation_review")
         return "disambiguation_review"
-    logger.info("No disambiguation needed — routing to human_review")
-    return "human_review"
+    logger.info("No disambiguation needed — routing to hydrate_preview")
+    return "hydrate_preview"
 
 
 def _increment_retry(state: ExportState) -> dict[str, Any]:
@@ -94,17 +112,37 @@ def build_graph() -> StateGraph:
     graph = StateGraph(ExportState)
 
     # Nodes
+    graph.add_node("guardrail", node_guardrail)
+    graph.add_node("orchestrator", node_orchestrator)
     graph.add_node("parse_intent", node_parse_intent)
     graph.add_node("validate_intent", node_validate_intent)
     graph.add_node("increment_retry", _increment_retry)
     graph.add_node("disambiguate", node_disambiguate)
     graph.add_node("disambiguation_review", _mark_pending_disambiguation)
+    graph.add_node("hydrate_preview", node_hydrate_preview)
     graph.add_node("human_review", _mark_pending_approval)
     graph.add_node("pre_execute", _mark_executing)
     graph.add_node("execute_export", node_execute_export)
+    graph.add_node("reset_signal", node_reset_signal)
 
-    # Edges
-    graph.set_entry_point("parse_intent")
+    # Entry: guardrail → orchestrator
+    graph.set_entry_point("guardrail")
+    graph.add_edge("guardrail", "orchestrator")
+
+    # Orchestrator routing
+    graph.add_conditional_edges(
+        "orchestrator",
+        _after_orchestrator,
+        {
+            "parse_intent": "parse_intent",
+            "reset_signal": "reset_signal",
+            "end": END,
+        },
+    )
+
+    graph.add_edge("reset_signal", END)
+
+    # parse_intent → validate_intent
     graph.add_edge("parse_intent", "validate_intent")
 
     # Conditional routing after validation
@@ -126,12 +164,15 @@ def build_graph() -> StateGraph:
         _after_disambiguate,
         {
             "disambiguation_review": "disambiguation_review",
-            "human_review": "human_review",
+            "hydrate_preview": "hydrate_preview",
         },
     )
 
-    # After disambiguation_review (HITL interrupt) → human_review
-    graph.add_edge("disambiguation_review", "human_review")
+    # After disambiguation_review (HITL interrupt) → hydrate_preview
+    graph.add_edge("disambiguation_review", "hydrate_preview")
+
+    # After hydrate_preview → human_review
+    graph.add_edge("hydrate_preview", "human_review")
 
     # After human_review (HITL interrupt happens here) → execute
     graph.add_edge("human_review", "pre_execute")

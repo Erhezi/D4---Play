@@ -1,0 +1,145 @@
+version: "1.0"
+version_last_updated: "2026-03-20"
+namespace: "payables_invoice_with_vendor_gl_index" 
+view_id: vw_AP_PAYABLESINVOICE_WITH_VENDOR_GL_INDEX
+database: PRIME          # must match a top-level key in connection.yaml
+schema: "[DM_MONTYNT\\dli2]"   # SQL Server schema bracket notation
+author: "Dan Li"
+
+# ── Enums: columns with a fixed allowed value set ─────────────────────────────
+enums:
+  - GLClass: ["INCOME", "BALANCE_SHEET"]
+  - EXC_FLAG: ["Default", "Open Inv - INFOR", "Patiend Refund - INFOR", "Recurring Entry - INFOR", "Vendor Class EMPR/ONETIME - INFOR", "Vendor Class HRPY/GOVN - INFOR"]
+
+# ── Keys: the natural unique or primary key of the view ───────────────────────
+keys:
+  primary: ["Company", "PayablesInvoice", "Vendor", "Index", "GL"]   # on inovice header level, company + payableinvoice define the unique invoice get processed by ERP system.
+
+# ── Field groups: organise columns for LLM prompt context ─────────────────────
+field_groups:
+  - group_name: "Core Line Item Fields"  # fields that even a lean system should include for a subject area/topic
+    group_type: "core"           # ALWAYS included, LLM must NOT list these in columns[]
+    granularity: "per row"
+    description: "Minimum viable row content for any export from this view."
+    columns_included: ["Company", "CompanyName", "PayablesInvoice", "PostingDate", "Invoice", "InvoiceDate", "InvoiceGLAmount", "Vendor", "VendorName"]
+  
+  - group_name: "Optional GL and Index Fields"  # fields that are important for financial analysis but may be excluded in a lean export.
+    group_type: "contextual"      # only included when user explicitly asks
+    granularity: "per row"
+    description: "Index and GL details that provide context on the invoice line, useful for understanding the type of spend"
+    columns_included: ["Index", "IndexText", "GL", "GLText", "GLClass"]
+  
+  - group_name: "Optional Other Attributes"  # fields that provide more details but are less critical for basic spend analysis.
+    group_type: "contextual"      # only included when user explicitly asks
+    granularity: "per row"
+    description: "Custom attribute that allow user to filter out certain type of spend quickly if needed."
+    columns_included: ["EXC_FLAG"]
+
+# ── Column catalog ─────────────────────────────────────────────────────────────
+columns:
+# basic invoice
+  - name: PayablesInvoice
+    label: "Infor Payables Invoice ID"
+    concept_id: payables_invoice
+    concept_role: id
+    accept_list_input: true
+    type: string
+  
+  - name: PostingDate
+    label: "Posting Date"
+    concept_id: posting_date
+    concept_role: attribute
+    description: "The date when the invoice was posted (distributed) in the ERP system. It determines the period in which the expense is recognized."
+    type: date
+    aliases: ["post date", "distributed date", "GL distribution date"]
+  
+  - name: Vendor
+    label: "Vendor ID"
+    concept_id: vendor
+    concept_role: id
+    accept_list_input: true
+    type: string
+  
+  - name: VendorName
+    label: "Vendor Name"
+    concept_id: vendor
+    concept_role: display
+    type: string
+  
+  - name: Invoice
+    label: "Invoice Number"
+    concept_id: invoice_number
+    concept_role: attribute
+    description: "The unique identifier for the invoice as provided by the vendor. Include letters and digits, and is used for reference and reconciliation purposes."
+    accept_list_input: true
+    type: string
+  
+  - name: InvoiceDate
+    label: "Invoice Date"
+    concept_id: invoice_date
+    concept_role: attribute
+    description: "The date when the invoice was created by the vendor. It may differ from the posting date and is often used to track payment terms and aging."
+    type: date
+
+  - name: Company
+    label: "Company Code"
+    concept_id: company
+    concept_role: id
+    type: string
+  
+  - name: CompanyText
+    label: "Company Name"
+    concept_id: company
+    concept_role: display
+    type: string
+  
+  - name: InvoiceGLAmount
+    label: "Invoice Amount (Distributed)"
+    concept_id: invoice_gl_amount
+    concept_role: attribute
+    description: "The total distributed amount of an invoice to a given GL under a Index. This may slightly differ from the original invoice amount due to adjustments, discounts, or previous account credits."
+    sum_check: true
+    type: decimal
+    aliases: ["invoiced amount", "total", "amount after distribution", "distributed total"]
+  
+  # Index and GL
+  - name: Index
+    label: "Index Code"
+    concept_id: index
+    concept_role: id
+    type: string
+  
+  - name: IndexText
+    label: "Index Name"
+    concept_id: index
+    concept_role: display
+    type: string
+
+  - name: GL
+    label: "GL Account Code"
+    concept_id: gl
+    concept_role: id
+    type: string
+  
+  - name: GLText
+    label: "GL Account Name"
+    concept_id: gl
+    concept_role: display
+    type: string
+
+  - name: GLClass
+    label: "GL Class"
+    concept_id: gl_class
+    concept_role: attribute
+    description: "Classification of GL accounts into 'INCOME' vs 'BALANCE_SHEET', where INCOME typically includes expense and revenue accounts that impact the profit and loss statement, while BALANCE_SHEET includes asset, liability, and equity accounts that appear on the balance sheet."
+    type: string
+    enum_ref: GLClass
+
+# other optional stuff
+  - name: EXC_FLAG
+    label: "Invoice Exclusion Custom Flag"
+    concept_id: exclusion_flag_ap_vendor_gl_index
+    concept_role: attribute
+    description: "A custom flag used by the finance team to mark certain invoices for exclusion from specific analyses or reports. The flag values indicate the reason for exclusion, such as 'Open Inv - INFOR' for open invoices in the Infor system, 'Patient Refund - INFOR' for refunds related to patient transactions, 'Recurring Entry - INFOR' for recurring journal entries, and specific vendor classes that are typically excluded from spend analysis."
+    type: string
+    enum_ref: EXC_FLAG

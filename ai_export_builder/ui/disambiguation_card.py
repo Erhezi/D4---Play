@@ -31,8 +31,13 @@ def render_disambiguation_card(
         id_col = result["companion"]
         matches = result["matches"]
         original_value = result["original_value"]
+        original_op = result.get("original_operator", "like")
+        # Use human-readable operator label
+        from ai_export_builder.models.intent import OPERATOR_LABELS
+        op_label = OPERATOR_LABELS.get(original_op, original_op)
+        display_val = ", ".join(original_value) if isinstance(original_value, list) else str(original_value)
 
-        st.markdown(f"**{text_col}** matching `{original_value}`:")
+        st.markdown(f"**{text_col}** {op_label} `{display_val}`:")
 
         if not matches:
             st.warning(
@@ -99,9 +104,4 @@ def _apply_disambiguation(
         else:
             new_filters.append(f)
 
-    return ExportIntent(
-        selected_view=intent.selected_view,
-        columns=intent.columns,
-        filters=new_filters,
-        warnings=intent.warnings,
-    )
+    return intent.model_copy(update={"filters": new_filters})

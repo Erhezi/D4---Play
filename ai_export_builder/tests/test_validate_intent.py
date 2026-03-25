@@ -5,7 +5,7 @@ import pytest
 
 from ai_export_builder.graph.nodes.validate_intent import node_validate_intent
 from ai_export_builder.graph.state import ExportState
-from ai_export_builder.models.intent import ExportIntent, FilterItem, FilterOperator
+from ai_export_builder.models.intent import ExportIntent, FilterItem, FilterOperator, SortItem
 
 
 def _make_state(intent: ExportIntent | None = None, **overrides) -> ExportState:
@@ -181,3 +181,41 @@ class TestColumnResolution:
         # VendorName should appear only once
         assert intent.columns.count("VendorName") == 1
         assert intent.columns.count("PO") == 1
+
+    def test_concept_group_expansion(self):
+        """Selecting a column with concept_id should pull in all siblings."""
+        # VendorName and Vendor share the same concept_id (vendor_entity)
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+        # Both display and id columns should be present
+        assert "VendorName" in intent.columns
+        assert "Vendor" in intent.columns
+
+
+class TestSortByValidation:
+    """Validate that sort_by columns are checked against the view."""
+
+    def test_valid_sort_column_passes(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+            sort_by=[SortItem(column="VendorName", direction="ASC")],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert result["validation_errors"] == []
+
+    def test_invalid_sort_column_fails(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+            sort_by=[SortItem(column="FakeColumn", direction="ASC")],
+        )
+        result = node_validate_intent(_make_state(intent))
+        assert any("Sort column" in e and "FakeColumn" in e for e in result["validation_errors"])

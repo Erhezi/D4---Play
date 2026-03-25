@@ -24,6 +24,8 @@ def log_export_request(
     row_count: int | None,
     status: str,
     error: str | None = None,
+    refinement_count: int = 0,
+    guardrail_result: str | None = None,
 ) -> None:
     """Append one JSON-lines record to the audit log."""
     record: dict[str, Any] = {
@@ -35,6 +37,8 @@ def log_export_request(
         "row_count": row_count,
         "status": status,
         "error": error,
+        "refinement_count": refinement_count,
+        "guardrail_result": guardrail_result,
     }
     try:
         with open(_LOG_FILE, "a", encoding="utf-8") as f:

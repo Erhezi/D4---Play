@@ -1,0 +1,142 @@
+version: "1.0"
+version_last_updated: "2026-03-20"
+namespace: "main_savings"
+view_id: vw_MainSavings
+database: SCS          # must match a top-level key in connection.yaml
+schema: "[SCSSaving]"   # SQL Server schema bracket notation
+author: "Dan Li"
+
+# ── Enums: columns with a fixed allowed value set ─────────────────────────────
+enums:
+  - Savings Channel: ["Operating Savings", "Rebate Savings"]
+  - Project Stage: ["L5", "SL5", "N.A."]
+  - Rebate Status: ["Approved", "N.A."]
+  - Supplemental Staffing Filter: ["Include", "Exclude"]
+
+# ── Keys: the natural unique or primary key of the view ───────────────────────
+keys:
+  primary: ["ID", "Saving Realization Year", "Savings Channel"]   # unique identifier for each savings initiative
+
+# ── Field groups: organise columns for LLM prompt context ─────────────────────
+field_groups:
+  - group_name: "Core Savings' Initiative Fields"  # fields that even a lean system should include for a subject area/topic
+    group_type: "core"           # ALWAYS included, LLM must NOT list these in columns[]
+    granularity: "per row"
+    description: "Minimum viable row content for any export from this view."
+    columns_included: ["Savings Channel", "ID", "Initiative Description", "Accountable Workstream", "Project Stage", "Rebate Status", "Total Savings", "Start Date"]
+  
+  - group_name: "Optional Realization Context Fields"  # fields that are important for understanding the realization context but may be excluded in a lean export.
+    group_type: "contextual"      # only included when user explicitly asks
+    granularity: "per row"
+    description: "Fields that provide more context on the realization of the savings, useful for understanding the timing and nature of the savings."
+    columns_included: ["Saving Realization Year", "Saving Entered Year", "Year Month", "Target Amount", "Total Target Amount"]
+
+  - group_name: "Optional Other Attributes"  # fields that are important for financial analysis but may be excluded in a lean export.
+    group_type: "contextual"      # only included when user explicitly asks
+    granularity: "per row"
+    description: "Fields that provide more details about the savings initiative, useful in filtering or link back to Wave tracking."
+    columns_included: ["Wave ID", "Supplemental Staffing Filter"]
+
+# ── Column catalog ─────────────────────────────────────────────────────────────
+columns:
+  - name: Savings Channel
+    label: "Savings Channel"
+    concept_id: savings_channel
+    concept_role: attribute
+    description: "The channel through which the savings is realized, either from operational initiatives or rebate programs."
+    type: string
+    enum_ref: Savings Channel
+  
+  - name: ID
+    label: "Savings Initiative ID"
+    concept_id: savings_initiative_id
+    concept_role: id
+    description: "Unique identifier for each savings initiative, can be used to link to other tracking tools for more details."
+    type: string
+  
+  - name: Wave ID
+    label: "Wave ID"
+    concept_id: wave_id
+    concept_role: attribute
+    description: "Identifier for the wave in which the operational savings initiative is tracked, sometimes rebate item also have this ID mapped."
+    type: string
+  
+  - name: Initiative Description
+    label: "Initiative Description"
+    concept_id: initiative_description
+    concept_role: attribute
+    description: "A brief manual description of what the saving is about."
+    type: string
+  
+  - name: Project Stage
+    label: "Project Stage"
+    concept_id: project_stage
+    concept_role: attribute
+    description: "The current stage of the project, for operational initiative, anything prior to stage 'SL5' is not included in this view; for rebate initiative, it will be 'N.A.'"
+    type: string
+    enum_ref: Project Stage
+
+  - name: Rebate Status
+    label: "Rebate Status"
+    concept_id: rebate_status
+    concept_role: attribute
+    description: "The approval status of the rebate savings initiative, for operational initiative, it will be 'N.A.'"
+    type: string
+    enum_ref: Rebate Status
+  
+  - name: Start Date
+    label: "Realization Start Date"
+    concept_id: realization_start_date
+    concept_role: attribute
+    description: "The date when the savings initiative started to count towards realized savings."
+    type: date
+  
+  - name: Supplemental Staffing Filter
+    label: "Supplemental Staffing Filter"
+    concept_id: supplemental_staffing_filter
+    concept_role: attribute
+    description: "Custom attribute that allow user to exclude supplemental staffing projects."
+    type: string
+    enum_ref: Supplemental Staffing Filter
+  
+  - name: Accountable Workstream
+    label: "Accountable Workstream"
+    concept_id: accountable_workstream
+    concept_role: attribute
+    type: string
+  
+  - name: Total Savings
+    label: "Total Savings"
+    concept_id: total_savings
+    concept_role: attribute
+    description: "The total savings amount for the savings initiative for a given year, calculated as net recurring benefit plus rebate amount."
+    sum_check: true
+    type: decimal
+  
+  - name: Saving Entered Year
+    label: "Saving Entered Year"
+    concept_id: saving_entered_year
+    concept_role: attribute
+    description: "The year when the savings initiative was qualified to be tracked, which may differ from the realization year."
+    type: integer
+  
+  - name: Saving Realization Year
+    label: "Saving Realization Year"
+    concept_id: saving_realization_year
+    concept_role: attribute
+    description: "The year when the savings is realized, which may differ from the entered year. For operational initiative, it is determined by the project stage and the corresponding wave; for rebate initiative, it is determined by the rebate start date."
+    type: integer
+  
+  - name: Target Amount
+    label: "Target Amount"
+    concept_id: target_amount
+    concept_role: attribute
+    description: "The target savings amount for a given savings channel in a given year."
+    type: decimal
+  
+  - name: Total Target Amount
+    label: "Total Target Amount"
+    concept_id: total_target_amount
+    concept_role: attribute
+    description: "The total target savings amount for all channels in a given year."
+    type: decimal

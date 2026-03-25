@@ -1,0 +1,35 @@
+# Registry of Common Dimensions
+
+# Define Common Business Concepts that are frequently used across different datasets and reports.
+# Only put the things that are important for correct join and filtering. (e.g., we defer the actual invoice number to view, because this is not something we will use for cross view understanding)
+common_concepts:
+  vendor:
+    description: "Standardized entity representing the seller of the product or service."
+    aliases: ["distributor", "Vendor name", "vendorname"]
+  manufacturer:
+    description: "The company that produces the product being sourced."
+    aliases: ["manufacturer", "MFR", "MFR name", "manufacturer name"]
+  company:
+    description: "The legal entity or business unit responsible for the transaction, and serve as the top level accounting entity for financial reporting"
+    aliases: ["legal entity", "accounting entity", "entity"]
+  business_area:
+    description: "A specific segment of business operations, usually map to a specific hospital site or top level functional team (e.g. IT, HR, Finance) within the company."
+    aliases: ["campus", "site", "faility", "business unit", "financial dimension 3", "FD3"]
+  cost_center:
+    description: "A specific department or function within the business area that incurs costs, used for internal cost tracking and management for the whole system, regardless of business area."
+    aliases: ["department", "cost center", "financial dimension 1", "FD1"]
+  index:
+    description: "A specific project or department (by concat cost center to business area) that is being tracked for financial performance, used for internal cost tracking and management for a given business area."
+    aliases: ["project", "program", "department", "financial dimension 5", "FD5"]
+  gl_account:
+    description: "General Ledger account, used for financial reporting and analysis, provides a semi-structured view of types of transactions."
+    aliases: ["general ledger account", "GL"]
+  po_number:
+    description: "The unique identifier for the purchase order in ERP."
+    aliases: ["po #", "order number", "po number"]
+  po_line_number:
+    description: "The line number of the purchase order, which combined with the PO number forms the natural key for this view."
+    aliases: ["po line #"]
+  payables_invoice:
+    description: "The unique identifier for the invoice in the accounts payable system for a given company (company + payables invoice uniquely identify an trackable physical invoice records in ERP)."
+    aliases: ["invoice id", "infor payables invoice id", "payables invoice id"]

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from ai_export_builder.models.intent import ExportIntent, FilterItem, FilterOperator
-from ai_export_builder.services.sql_builder import build_disambiguation_query, build_query
+from ai_export_builder.models.intent import ExportIntent, FilterItem, FilterOperator, SortItem
+from ai_export_builder.services.sql_builder import build_aggregation_query, build_disambiguation_query, build_query
 
 
 class TestBasicQuery:
@@ -178,3 +178,168 @@ class TestDisambiguationQuery:
         )
         assert "'; DROP TABLE Students;--" not in sql
         assert "'; DROP TABLE Students;--" in params
+
+
+class TestDynamicOrderBy:
+    def test_single_sort_column_asc(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName", "CalculateExtendedAmount"],
+            filters=[],
+            sort_by=[SortItem(column="VendorName", direction="ASC")],
+        )
+        sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)
+        assert "[VendorName] ASC" in sql
+        assert "ORDER BY 1" not in sql
+
+    def test_single_sort_column_desc(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName", "CalculateExtendedAmount"],
+            filters=[],
+            sort_by=[SortItem(column="CalculateExtendedAmount", direction="DESC")],
+        )
+        sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)
+        assert "[CalculateExtendedAmount] DESC" in sql
+
+    def test_multi_sort_columns(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName", "CalculateExtendedAmount"],
+            filters=[],
+            sort_by=[
+                SortItem(column="VendorName", direction="ASC"),
+                SortItem(column="CalculateExtendedAmount", direction="DESC"),
+            ],
+        )
+        sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)
+        assert "[VendorName] ASC, [CalculateExtendedAmount] DESC" in sql
+
+    def test_no_sort_defaults_to_order_by_1(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+            sort_by=[],
+        )
+        sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)
+        assert "ORDER BY 1" in sql
+
+    def test_sort_column_not_in_columns_ignored(self):
+        """Sort columns not in the selected columns list are silently dropped."""
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+            sort_by=[SortItem(column="NonExistentCol", direction="ASC")],
+        )
+        sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)
+        # Should fall back to ORDER BY 1 since the sort column was dropped
+        assert "ORDER BY 1" in sql
+        assert "NonExistentCol" not in sql
+
+    def test_sort_does_not_affect_params(self):
+        """Sort columns should not add any params."""
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[FilterItem(column="VendorName", operator=FilterOperator.eq, value="Medline")],
+            sort_by=[SortItem(column="VendorName", direction="DESC")],
+        )
+        sql, params = build_query(intent, user_facilities=["ALL"], max_rows=100)
+        assert "[VendorName] DESC" in sql
+        assert params == ["Medline", 100]
+
+
+class TestAggregationQuery:
+    def test_basic_aggregation_count_only(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+        )
+        sql, params = build_aggregation_query(intent, [], user_facilities=["ALL"])
+        assert "COUNT(*) AS row_count" in sql
+        assert "SUM" not in sql
+        assert "[vw_PO_PURCHASEORDER_LINE_WITH_PCAT]" in sql
+        assert params == []
+
+    def test_aggregation_with_sum_check_column(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName", "CalculateExtendedAmount"],
+            filters=[],
+        )
+        sql, params = build_aggregation_query(
+            intent, ["CalculateExtendedAmount"], user_facilities=["ALL"]
+        )
+        assert "COUNT(*) AS row_count" in sql
+        assert "SUM([CalculateExtendedAmount]) AS total_CalculateExtendedAmount" in sql
+        assert params == []
+
+    def test_aggregation_with_filters(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[
+                FilterItem(column="VendorName", operator=FilterOperator.eq, value="Medline"),
+            ],
+        )
+        sql, params = build_aggregation_query(
+            intent, ["CalculateExtendedAmount"], user_facilities=["ALL"]
+        )
+        assert "[VendorName] = ?" in sql
+        assert "Medline" in params
+        assert "Medline" not in sql
+
+    def test_aggregation_with_rls(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+        )
+        sql, params = build_aggregation_query(
+            intent, ["CalculateExtendedAmount"], user_facilities=["FAC_A", "FAC_B"]
+        )
+        assert "[FacilityCode] IN (?, ?)" in sql
+        assert params == ["FAC_A", "FAC_B"]
+
+    def test_aggregation_no_row_limit(self):
+        """Aggregation queries must NOT have OFFSET/FETCH."""
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+        )
+        sql, params = build_aggregation_query(intent, [], user_facilities=["ALL"])
+        assert "OFFSET" not in sql
+        assert "FETCH" not in sql
+
+    def test_aggregation_multiple_sum_columns(self):
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[],
+        )
+        sql, params = build_aggregation_query(
+            intent, ["CalculateExtendedAmount", "Total Savings"], user_facilities=["ALL"]
+        )
+        assert "SUM([CalculateExtendedAmount]) AS total_CalculateExtendedAmount" in sql
+        assert "SUM([Total Savings]) AS total_Total_Savings" in sql
+
+    def test_aggregation_no_injection(self):
+        """Filter values in aggregation query must be parameterized."""
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[
+                FilterItem(
+                    column="VendorName",
+                    operator=FilterOperator.eq,
+                    value="Robert'); DROP TABLE Students;--",
+                ),
+            ],
+        )
+        sql, params = build_aggregation_query(intent, [], user_facilities=["ALL"])
+        assert "Robert'); DROP TABLE Students;--" not in sql
+        assert "Robert'); DROP TABLE Students;--" in params

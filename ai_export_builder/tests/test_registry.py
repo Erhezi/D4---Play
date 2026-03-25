@@ -21,29 +21,29 @@ def registry():
 # ------------------------------------------------------------------
 
 class TestResolveAlias:
-    def test_known_alias_supplier(self, registry):
-        result = registry.resolve_alias("supplier")
+    def test_known_alias_spend(self, registry):
+        result = registry.resolve_alias("spend")
         assert result is not None
         view_id, col_name = result
         assert view_id == "vw_PO_PURCHASEORDER_LINE_WITH_PCAT"
-        assert col_name == "VendorName"
+        assert col_name == "CalculateExtendedAmount"
 
     def test_alias_case_insensitive(self, registry):
-        result = registry.resolve_alias("SUPPLIER")
+        result = registry.resolve_alias("SPEND")
         assert result is not None
-        assert result == registry.resolve_alias("supplier")
+        assert result == registry.resolve_alias("spend")
 
     def test_unknown_alias_returns_none(self, registry):
         assert registry.resolve_alias("nonexistent_alias_xyz") is None
 
     def test_alias_with_whitespace(self, registry):
-        result = registry.resolve_alias("  supplier  ")
+        result = registry.resolve_alias("  spend  ")
         assert result is not None
 
-    def test_spend_alias(self, registry):
-        result = registry.resolve_alias("spend")
+    def test_po_number_alias(self, registry):
+        result = registry.resolve_alias("po number")
         assert result is not None
-        assert result[1] == "CalculateExtendedAmount"
+        assert result[1] == "PO"
 
 
 # ------------------------------------------------------------------
@@ -72,13 +72,13 @@ class TestViewLookups:
         assert registry.get_all_columns("nonexistent") == []
 
     def test_get_view_candidates(self, registry):
-        candidates = registry.get_view_candidates(["supplier"])
+        candidates = registry.get_view_candidates(["spend"])
         assert "vw_PO_PURCHASEORDER_LINE_WITH_PCAT" in candidates
 
     def test_get_column_meta(self, registry):
         meta = registry.get_column_meta("vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "VendorName")
         assert meta is not None
-        assert "vendor" in meta.get("concept", "").lower()
+        assert meta.get("concept_id") == "vendor"
 
     def test_get_view_meta(self, registry):
         meta = registry.get_view_meta("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
@@ -212,9 +212,74 @@ class TestRegistrySchemaForPrompt:
     def test_schema_includes_field_groups(self, registry):
         schema = registry.get_registry_schema_for_prompt()
         assert "Field Groups:" in schema
-        assert "PO Line Details" in schema
-        assert "type: basic" in schema
+        assert "Core PO Line Item Fields" in schema
+        assert "type: core" in schema
 
-    def test_schema_includes_companion_info(self, registry):
+    def test_schema_includes_concept_info(self, registry):
         schema = registry.get_registry_schema_for_prompt()
+        assert "concept_id:" in schema
         assert "companion:" in schema
+
+
+# ------------------------------------------------------------------
+# Concept groups & sum_check
+# ------------------------------------------------------------------
+
+class TestConceptGroups:
+    def test_vendor_concept_group(self, registry):
+        group = registry.get_concept_group(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "vendor"
+        )
+        assert "VendorName" in group
+        assert "Vendor" in group
+
+    def test_concept_group_unknown_view(self, registry):
+        assert registry.get_concept_group("nonexistent", "vendor") == []
+
+    def test_concept_group_unknown_concept(self, registry):
+        assert registry.get_concept_group(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "nonexistent_concept"
+        ) == []
+
+    def test_get_column_concept_id(self, registry):
+        assert registry.get_column_concept_id(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "VendorName"
+        ) == "vendor"
+
+    def test_get_column_concept_id_unknown(self, registry):
+        assert registry.get_column_concept_id(
+            "vw_PO_PURCHASEORDER_LINE_WITH_PCAT", "nonexistent"
+        ) is None
+
+
+class TestSumCheck:
+    def test_po_sum_check(self, registry):
+        cols = registry.get_sum_check_columns("vw_PO_PURCHASEORDER_LINE_WITH_PCAT")
+        assert "CalculateExtendedAmount" in cols
+
+    def test_ap_sum_check(self, registry):
+        cols = registry.get_sum_check_columns("vw_AP_PAYABLESINVOICE_WITH_VENDOR_GL_INDEX")
+        assert "InvoiceGLAmount" in cols
+
+    def test_savings_sum_check(self, registry):
+        cols = registry.get_sum_check_columns("vw_MainSavings")
+        assert "Total Savings" in cols
+
+    def test_unknown_view_sum_check(self, registry):
+        assert registry.get_sum_check_columns("nonexistent") == []
+
+
+# ------------------------------------------------------------------
+# Guardrail & topic summary
+# ------------------------------------------------------------------
+
+class TestGuardrailAndTopics:
+    def test_get_guardrail_examples_loaded(self, registry):
+        examples = registry.get_guardrail_examples()
+        assert "blocked_categories" in examples
+        assert "dml_or_injection" in examples["blocked_categories"]
+
+    def test_get_available_topics_summary(self, registry):
+        summary = registry.get_available_topics_summary()
+        assert "Purchase Order" in summary or "purchase order" in summary.lower()
+        assert "Invoice" in summary or "invoice" in summary.lower()

@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     daily_request_limit: int = 10
     max_export_rows: int = 100_000
     fiscal_year_start_month: int = 1
+    max_refinement_rounds: int = 3
 
     # Hardcoded test user (MVP)
     test_user_id: str = "test_user"

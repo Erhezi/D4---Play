@@ -11,8 +11,10 @@ from ai_export_builder.config import settings
 
 
 _REGISTRY_DIR = Path(__file__).resolve().parent.parent / "registry"
-_VIEWS_PATH = _REGISTRY_DIR / "registry_views.yaml"
+_VIEWS_INDEX_PATH = _REGISTRY_DIR / "registry_views.yaml"
+_VIEWS_DIR = _REGISTRY_DIR / "views"
 _CONNECTIONS_PATH = _REGISTRY_DIR / "connection.yaml"
+_GUARDRAIL_PATH = _REGISTRY_DIR / "common_invalid_queries.yaml"
 
 
 def _normalize_views(raw_views: list[dict[str, Any]]) -> dict[str, Any]:
@@ -42,8 +44,12 @@ class Registry:
         self,
         views: dict[str, Any],
         connections: dict[str, Any],
+        views_index: dict[str, Any] | None = None,
+        guardrail_examples: dict[str, Any] | None = None,
     ) -> None:
         self._views = views
+        self._views_index = views_index or {}
+        self._guardrail_examples = guardrail_examples or {}
         # connections keyed by database key, e.g. "PRIME", "SCS"
         self._connections: dict[str, Any] = connections.get("databases", {})
         # Build lowercased alias → (view_id, column_name) index
@@ -51,16 +57,50 @@ class Registry:
         # Build bidirectional companion index: (view_id, col) → companion_col
         # e.g. ("vw_PO_...", "VendorName") → "Vendor" and vice-versa
         self._companion_index: dict[tuple[str, str], str] = {}
+        # Build concept index: (view_id, concept_id) → [col_names]
+        self._concept_index: dict[tuple[str, str], list[str]] = {}
+        # Build sum_check index: view_id → [col_names]
+        self._sum_check_index: dict[str, list[str]] = {}
+
         for view_id, view_meta in self._views.items():
+            sum_check_cols: list[str] = []
+            # First pass: collect concept roles and build alias/sum_check indices
+            concept_roles: dict[str, dict[str, list[str]]] = {}  # concept_id → {role → [col_names]}
             for col_name, col_meta in view_meta.get("columns", {}).items():
                 for alias in col_meta.get("aliases", []):
                     self._alias_index[alias.lower()] = (view_id, col_name)
-                # Build companion pairs from required_for_field_mapping
+                # Build concept index
+                concept_id = col_meta.get("concept_id")
+                if concept_id:
+                    key = (view_id, concept_id)
+                    if key not in self._concept_index:
+                        self._concept_index[key] = []
+                    self._concept_index[key].append(col_name)
+                    # Track roles for companion pair building
+                    role = col_meta.get("concept_role", "")
+                    if role in ("id", "display"):
+                        if concept_id not in concept_roles:
+                            concept_roles[concept_id] = {}
+                        if role not in concept_roles[concept_id]:
+                            concept_roles[concept_id][role] = []
+                        concept_roles[concept_id][role].append(col_name)
+                # Legacy companion pairs from required_for_field_mapping
                 mapping_target = col_meta.get("required_for_field_mapping")
                 if mapping_target:
-                    # col_name (ID) is required when mapping_target (text) is selected
                     self._companion_index[(view_id, col_name)] = mapping_target
                     self._companion_index[(view_id, mapping_target)] = col_name
+                # Build sum_check index
+                if col_meta.get("sum_check"):
+                    sum_check_cols.append(col_name)
+            # Second pass: build companion pairs from concept_id roles (id ↔ display)
+            for _concept_id, roles in concept_roles.items():
+                id_cols = roles.get("id", [])
+                display_cols = roles.get("display", [])
+                if len(id_cols) == 1 and len(display_cols) == 1:
+                    self._companion_index[(view_id, id_cols[0])] = display_cols[0]
+                    self._companion_index[(view_id, display_cols[0])] = id_cols[0]
+            if sum_check_cols:
+                self._sum_check_index[view_id] = sum_check_cols
 
     # ------------------------------------------------------------------
     # Connection routing
@@ -130,8 +170,11 @@ class Registry:
         return result
 
     def get_basic_columns(self, view_id: str) -> list[str]:
-        """Return columns from all 'basic' field groups (always included in output)."""
-        return self.get_field_group_columns(view_id, "basic")
+        """Return columns from 'core' (or legacy 'basic') field groups — always included in output."""
+        result = self.get_field_group_columns(view_id, "core")
+        if not result:
+            result = self.get_field_group_columns(view_id, "basic")
+        return result
 
     def get_companion_column(self, view_id: str, column: str) -> str | None:
         """Return the companion column for a text↔ID pair, or None."""
@@ -140,19 +183,66 @@ class Registry:
     def get_disambiguable_columns(self, view_id: str) -> dict[str, str]:
         """Return {text_column: id_column} for columns that have a companion pair.
 
-        Only returns entries where the column has ``required_for_field_mapping``
-        (i.e. the ID column pointing to the text column).
+        A column is disambiguable if it has a companion (id ↔ display) via
+        concept_role grouping or legacy required_for_field_mapping.
+        Returns the display (text) column as key, id column as value.
         """
         view = self._views.get(view_id)
         if not view:
             return {}
         result: dict[str, str] = {}
         for col_name, col_meta in view.get("columns", {}).items():
+            # Legacy path: required_for_field_mapping
             mapping_target = col_meta.get("required_for_field_mapping")
             if mapping_target:
-                # col_name is the ID, mapping_target is the text column
                 result[mapping_target] = col_name
+            # Concept-role path: display columns with an id companion
+            concept_role = col_meta.get("concept_role")
+            if concept_role == "display":
+                companion = self._companion_index.get((view_id, col_name))
+                if companion:
+                    # Verify companion is the 'id' role
+                    comp_meta = self.get_column_meta(view_id, companion)
+                    if comp_meta and comp_meta.get("concept_role") == "id":
+                        result[col_name] = companion
         return result
+
+    # ------------------------------------------------------------------
+    # Concept groups & sum_check
+    # ------------------------------------------------------------------
+
+    def get_concept_group(self, view_id: str, concept_id: str) -> list[str]:
+        """Return all column names sharing a concept_id within a view."""
+        return list(self._concept_index.get((view_id, concept_id), []))
+
+    def get_column_concept_id(self, view_id: str, column: str) -> str | None:
+        """Return the concept_id for a specific column, or None."""
+        meta = self.get_column_meta(view_id, column)
+        return meta.get("concept_id") if meta else None
+
+    def get_sum_check_columns(self, view_id: str) -> list[str]:
+        """Return column names marked sum_check: true for a view."""
+        return list(self._sum_check_index.get(view_id, []))
+
+    # ------------------------------------------------------------------
+    # Guardrail & topic summary
+    # ------------------------------------------------------------------
+
+    def get_guardrail_examples(self) -> dict[str, Any]:
+        """Return the guardrail examples loaded from common_invalid_queries.yaml."""
+        return self._guardrail_examples
+
+    def get_available_topics_summary(self) -> str:
+        """Build a user-friendly summary of what topics/views can be queried.
+
+        Uses the views_index (registry_views.yaml) for topic + description.
+        """
+        lines: list[str] = []
+        for view_id, meta in self._views_index.items():
+            display = meta.get("display_name", view_id)
+            topic = meta.get("primary_topic", "")
+            lines.append(f"- {display}: {topic}")
+        return "\n".join(lines) if lines else "No views available."
 
     def get_all_columns(self, view_id: str) -> list[str]:
         """Return all column names for a given view, or empty list if unknown."""
@@ -187,7 +277,7 @@ class Registry:
             lines.append(f"  Display Name: {view_meta.get('display_name', '')}")
             lines.append(f"  Description: {view_meta.get('description', '')}")
             # Sample questions help the LLM understand typical user requests
-            samples = view_meta.get("sample_questions", [])
+            samples = view_meta.get("sample_questions") or view_meta.get("samples_of_valid_queries", [])
             if samples:
                 lines.append("  Sample Questions:")
                 for sq in samples:
@@ -209,32 +299,92 @@ class Registry:
                 label = col_meta.get("label")
                 if label:
                     parts.append(f'label: "{label}"')
-                concept = col_meta.get("concept")
-                if concept:
-                    parts.append(f"concept: {concept}")
+                concept_id = col_meta.get("concept_id")
+                if concept_id:
+                    parts.append(f"concept_id: {concept_id}")
+                concept_role = col_meta.get("concept_role")
+                if concept_role:
+                    parts.append(f"role: {concept_role}")
                 aliases = col_meta.get("aliases", [])
                 if aliases:
                     parts.append(f"aliases: [{', '.join(aliases)}]")
                 companion = self.get_companion_column(view_id, col_name)
                 if companion:
                     parts.append(f"companion: {companion}")
+                if col_meta.get("sum_check"):
+                    parts.append("sum_check: true")
                 lines.append(f"    - {' | '.join(parts)}")
             lines.append("")
         return "\n".join(lines)
 
 
 def load_registry(
-    views_path: Path | None = None,
+    views_index_path: Path | None = None,
+    views_dir: Path | None = None,
     connections_path: Path | None = None,
+    guardrail_path: Path | None = None,
 ) -> Registry:
-    """Load registry_views.yaml and connection.yaml, return a Registry instance."""
-    vp = views_path or _VIEWS_PATH
+    """Load registry YAML files and return a Registry instance.
+
+    View metadata is assembled by merging:
+    1. ``registry_views.yaml`` — header info (display_name, primary_topic, description, samples)
+    2. Per-view YAML files in ``views/`` — column-level details, field_groups, keys, enums
+
+    The per-view files are the canonical source for column definitions. Header
+    metadata from registry_views.yaml is overlaid onto each view dict for
+    convenience (display_name, description, etc. accessible on the same object).
+    """
+    vip = views_index_path or _VIEWS_INDEX_PATH
+    vd = views_dir or _VIEWS_DIR
     cp = connections_path or _CONNECTIONS_PATH
+    gp = guardrail_path or _GUARDRAIL_PATH
 
-    with open(vp, encoding="utf-8") as f:
-        raw_views: list[dict[str, Any]] = yaml.safe_load(f) or []
+    # --- Load views index (header metadata) ---
+    views_index: dict[str, Any] = {}
+    if vip.exists():
+        with open(vip, encoding="utf-8") as f:
+            raw_index = yaml.safe_load(f) or {}
+        # Handle both flat list and {views: [...]} formats
+        raw_list = raw_index.get("views", raw_index) if isinstance(raw_index, dict) else raw_index
+        if isinstance(raw_list, list):
+            for entry in raw_list:
+                vid = entry.get("view_id")
+                if vid:
+                    views_index[vid] = entry
 
-    with open(cp, encoding="utf-8") as f:
-        connections: dict[str, Any] = yaml.safe_load(f) or {}
+    # --- Load per-view YAML files (column-level detail) ---
+    raw_views: list[dict[str, Any]] = []
+    if vd.is_dir():
+        for yaml_file in sorted(vd.glob("*.yaml")):
+            with open(yaml_file, encoding="utf-8") as f:
+                view_data = yaml.safe_load(f)
+            if isinstance(view_data, dict) and view_data.get("view_id"):
+                # Overlay header metadata from views_index onto the view dict
+                vid = view_data["view_id"]
+                if vid in views_index:
+                    header = views_index[vid]
+                    for key in ("display_name", "primary_topic", "description",
+                                "granularity", "time_coverage",
+                                "samples_of_valid_queries", "samples_of_invalid_queries"):
+                        if key in header and key not in view_data:
+                            view_data[key] = header[key]
+                raw_views.append(view_data)
 
-    return Registry(_normalize_views(raw_views), connections)
+    # --- Load connections ---
+    connections: dict[str, Any] = {}
+    if cp.exists():
+        with open(cp, encoding="utf-8") as f:
+            connections = yaml.safe_load(f) or {}
+
+    # --- Load guardrail examples ---
+    guardrail_examples: dict[str, Any] = {}
+    if gp.exists():
+        with open(gp, encoding="utf-8") as f:
+            guardrail_examples = yaml.safe_load(f) or {}
+
+    return Registry(
+        _normalize_views(raw_views),
+        connections,
+        views_index=views_index,
+        guardrail_examples=guardrail_examples,
+    )

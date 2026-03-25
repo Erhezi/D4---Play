@@ -63,6 +63,12 @@ with st.sidebar:
     remaining = rate_limiter.remaining(settings.test_user_id)
     st.markdown(f"**Requests remaining today:** {remaining} / {settings.daily_request_limit}")
 
+    # Show refinement round if in refinement loop
+    _gs_sidebar = st.session_state.get("graph_state") or {}
+    _ref_count = _gs_sidebar.get("refinement_count", 0)
+    if _ref_count > 0:
+        st.markdown(f"**Refinement round:** {_ref_count} / {settings.max_refinement_rounds}")
+
     if st.session_state.get("result_df") is not None:
         st.divider()
         st.markdown("### Download")
@@ -130,6 +136,7 @@ if st.session_state.get("awaiting_disambiguation"):
                 "assistant",
                 "Entity selection confirmed. Please review the full export details below.",
             )
+            st.session_state.preview_active = False
             st.session_state.awaiting_confirmation = True
             st.rerun()
 
@@ -142,14 +149,45 @@ if st.session_state.get("awaiting_confirmation"):
     validation_errors = graph_state.get("validation_errors", [])
 
     if intent is not None:
-        confirmed, edited_intent = render_verification_card(
-            intent, registry, validation_errors=validation_errors
+        action, edited_intent = render_verification_card(
+            intent,
+            registry,
+            validation_errors=validation_errors,
+            preview_data=graph_state.get("preview_data"),
+            aggregation_summary=graph_state.get("aggregation_summary"),
         )
 
-        if confirmed and edited_intent is not None:
+        if action == "preview" and edited_intent is not None:
+            # Run preview query with current column/filter edits
+            graph_state["intent"] = edited_intent
+            graph_state["preview_data"] = None
+            graph_state["aggregation_summary"] = None
+            from ai_export_builder.graph.nodes.hydrate_preview import node_hydrate_preview
+            try:
+                preview_result = node_hydrate_preview(graph_state)
+                graph_state.update(preview_result)
+            except Exception as exc:
+                add_message("assistant", f"⚠️ Preview generation failed: {exc}")
+            st.session_state.graph_state = graph_state
+            st.session_state.preview_active = True
+            st.rerun()
+
+        if action == "refine" and edited_intent is not None:
+            # Keep the verification card and preview visible; enable chat for refinement
+            graph_state["intent"] = edited_intent
+            graph_state["previous_intent"] = edited_intent
+            st.session_state.graph_state = graph_state
+            st.session_state.awaiting_refinement_input = True
+            add_message("assistant", "What would you like to change? The current preview is shown above for reference.")
+            st.rerun()
+
+        if action is True and edited_intent is not None:
             # User confirmed — execute the query directly
             st.session_state.awaiting_confirmation = False
+            st.session_state.preview_active = False
             graph_state["intent"] = edited_intent
+            graph_state["previous_intent"] = None  # Clear refinement context
+            graph_state["refinement_count"] = 0
             st.session_state.graph_state = graph_state
 
             add_message("assistant", "Running export query…")
@@ -173,7 +211,7 @@ if st.session_state.get("awaiting_confirmation"):
 
                     # Show preview
                     if result_df is not None and len(result_df) > 0:
-                        st.dataframe(result_df.head(100), use_container_width=True)
+                        st.dataframe(result_df.head(100), width='stretch')
 
                     # Audit log
                     sql, _ = build_query(edited_intent, settings.user_facilities)
@@ -210,25 +248,19 @@ if st.session_state.get("awaiting_confirmation"):
                 )
             st.rerun()
 
-        elif edited_intent is not None and not confirmed:
-            # User chose "Edit & Resubmit"
-            st.session_state.awaiting_confirmation = False
-            resubmit_text = (
-                f"Edited intent for view `{edited_intent.selected_view}` "
-                f"with {len(edited_intent.columns)} columns and "
-                f"{len(edited_intent.filters)} filters."
-            )
-            add_message("user", resubmit_text)
-            # Re-run the full graph with the edited intent as the new query context
-            st.session_state.graph_state = None
-            st.rerun()
-
 # ---------------------------------------------------------------------------
 # Chat input handling
 # ---------------------------------------------------------------------------
 user_input = get_user_input()
 
 if user_input:
+    # Reset UI states for new/refinement request
+    st.session_state.preview_active = False
+    st.session_state.awaiting_refinement_input = False
+    for key in list(st.session_state.keys()):
+        if key.startswith("grp_") or key.startswith("chk_"):
+            del st.session_state[key]
+
     # Rate-limit check
     if not rate_limiter.check(settings.test_user_id):
         add_message(
@@ -240,16 +272,32 @@ if user_input:
         add_message("user", user_input)
         add_message("assistant", "🔍 Parsing your request…")
 
-        # Build initial state
+        # Build initial state — carry over refinement context if available
         thread_id = str(uuid.uuid4())
         st.session_state.thread_id = thread_id
 
+        existing_gs = st.session_state.get("graph_state") or {}
+        previous_intent = existing_gs.get("previous_intent")
+        refinement_count = existing_gs.get("refinement_count", 0)
+        prev_disambiguation = existing_gs.get("disambiguation_results", [])
+        if previous_intent is not None:
+            refinement_count += 1
+            # Carry original query from the first request
+            original_user_query = existing_gs.get("original_user_query", "")
+        else:
+            prev_disambiguation = []  # Don't carry stale results for fresh requests
+            original_user_query = user_input  # This IS the original request
+
         initial_state: ExportState = {
             "user_query": user_input,
+            "original_user_query": original_user_query,
             "intent": None,
             "validation_errors": [],
             "status": "parsing",
             "retry_count": 0,
+            "refinement_count": refinement_count,
+            "previous_intent": previous_intent,
+            "disambiguation_results": prev_disambiguation,
             "temporal_context": TemporalContext(
                 current_date=date.today().isoformat(),
                 fiscal_year_start_month=settings.fiscal_year_start_month,
@@ -285,12 +333,22 @@ if user_input:
                 # Graph paused at HITL breakpoint
                 intent = graph_state.get("intent")
                 if intent:
-                    add_message(
-                        "assistant",
-                        f"I've parsed your request. Please review the export details below for "
-                        f"**{intent.selected_view}** with **{len(intent.columns)}** columns "
-                        f"and **{len(intent.filters)}** filters.",
-                    )
+                    ref_cnt = graph_state.get("refinement_count", 0)
+                    if ref_cnt > 0:
+                        add_message(
+                            "assistant",
+                            f"Updated! Now **{len(intent.columns)}** columns "
+                            f"and **{len(intent.filters)}** filters. "
+                            "Please review below.",
+                        )
+                    else:
+                        add_message(
+                            "assistant",
+                            f"I've parsed your request. Please review the export details below for "
+                            f"**{intent.selected_view}** with **{len(intent.columns)}** columns "
+                            f"and **{len(intent.filters)}** filters.",
+                        )
+                st.session_state.preview_active = False
                 st.session_state.awaiting_confirmation = True
                 st.rerun()
 
@@ -318,6 +376,8 @@ if user_input:
                     status="failed",
                     error=detail,
                 )
+                # Clear state so next input is treated as a fresh request
+                st.session_state.graph_state = None
 
         except Exception as exc:
             add_message("assistant", f"❌ An unexpected error occurred: {exc}")
@@ -330,3 +390,5 @@ if user_input:
                 status="failed",
                 error=str(exc),
             )
+            # Clear state so next input is treated as a fresh request
+            st.session_state.graph_state = None

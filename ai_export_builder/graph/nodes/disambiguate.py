@@ -44,49 +44,65 @@ def node_disambiguate(state: ExportState) -> dict[str, Any]:
         text_col = f.column
         id_col = disambiguable[text_col]
 
-        # For eq operator, wrap value in wildcards for the preview
-        like_value = f.value if isinstance(f.value, str) else str(f.value)
-        # Strip any existing wildcards then wrap for partial match
-        like_value = like_value.strip("%")
-        like_value = f"%{like_value}%"
+        # Collect the values to disambiguate (may be a list for multi-value LIKE)
+        raw_values: list[str]
+        if isinstance(f.value, list):
+            raw_values = [str(v) for v in f.value]
+        else:
+            raw_values = [str(f.value)]
 
-        try:
-            sql, params = build_disambiguation_query(
-                view_id=intent.selected_view,
-                text_col=text_col,
-                id_col=id_col,
-                like_value=like_value,
-                user_facilities=facilities,
-            )
-            logger.info(
-                "node_disambiguate: previewing %s LIKE %s (%d params)",
-                text_col, like_value, len(params),
-            )
-            df = execute_query_for_view(
-                view_id=intent.selected_view,
-                sql=sql,
-                registry=_registry,
-                params=params,
-            )
-            matches = [
-                {"text": row[text_col], "id": row[id_col]}
-                for _, row in df.iterrows()
-            ]
-            results.append({
-                "column": text_col,
-                "companion": id_col,
-                "original_operator": f.operator.value,
-                "original_value": f.value,
-                "matches": matches,
-            })
-            logger.info(
-                "node_disambiguate: %s returned %d distinct matches",
-                text_col, len(matches),
-            )
-        except Exception as exc:
-            logger.error("node_disambiguate: disambiguation query failed — %s", exc)
-            # Don't block the workflow; skip disambiguation for this filter
-            continue
+        all_matches: list[dict[str, str]] = []
+        for raw_val in raw_values:
+            like_value = raw_val.strip("%")
+            like_value = f"%{like_value}%"
+
+            try:
+                sql, params = build_disambiguation_query(
+                    view_id=intent.selected_view,
+                    text_col=text_col,
+                    id_col=id_col,
+                    like_value=like_value,
+                    user_facilities=facilities,
+                )
+                logger.info(
+                    "node_disambiguate: previewing %s LIKE %s (%d params)",
+                    text_col, like_value, len(params),
+                )
+                df = execute_query_for_view(
+                    view_id=intent.selected_view,
+                    sql=sql,
+                    registry=_registry,
+                    params=params,
+                )
+                matches = [
+                    {"text": row[text_col], "id": row[id_col]}
+                    for _, row in df.iterrows()
+                ]
+                all_matches.extend(matches)
+                logger.info(
+                    "node_disambiguate: %s LIKE %s returned %d distinct matches",
+                    text_col, like_value, len(matches),
+                )
+            except Exception as exc:
+                logger.error("node_disambiguate: disambiguation query failed — %s", exc)
+                continue
+
+        # Deduplicate matches by (text, id) pair
+        seen: set[tuple[str, str]] = set()
+        unique_matches: list[dict[str, str]] = []
+        for m in all_matches:
+            key = (str(m["text"]), str(m["id"]))
+            if key not in seen:
+                seen.add(key)
+                unique_matches.append(m)
+
+        results.append({
+            "column": text_col,
+            "companion": id_col,
+            "original_operator": f.operator.value,
+            "original_value": f.value,
+            "matches": unique_matches,
+        })
 
     needed = any(r["matches"] for r in results)
     return {

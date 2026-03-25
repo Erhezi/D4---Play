@@ -1,0 +1,46 @@
+version: "1.0"
+description: >
+  Examples of blocked queries, organized by category, used as few-shot context
+  for the guardrail LLM classification prompt.  NOT used as runtime regex.
+
+blocked_categories:
+  dml_or_injection:
+    description: "User attempts to perform non-read operations or SQL injection"
+    user_message: >
+      This tool only supports data export (read-only queries).
+      It cannot modify, delete, or update any data.
+    examples:
+      - "Update the table so the spend amount for PO #12345 is $5000."
+      - "Delete all invoices from last year."
+      - "Drop the vendor table."
+      - "INSERT INTO vendors VALUES ('New Vendor', '1234')."
+      - "'; DROP TABLE vendors; --"
+      - "Pay vendor XYZ $5000 for invoice #12345."
+      - "Approve PO #9999 for department cardiology."
+
+  phi_pii:
+    description: "User requests patient health information or personally identifiable information"
+    user_message: >
+      This system is designed for procurement and financial data exports only.
+      Patient health information (PHI) and personally identifiable information
+      (PII) are not available through this tool.
+    examples:
+      - "Export the list of patients who had pacemakers implanted last year."
+      - "Show me all patient MRNs associated with surgical supplies."
+      - "Give me the SSNs of all vendors."
+      - "What diagnoses are linked to our top-spending departments?"
+      - "List the insurance member IDs for beneficiaries in urology."
+
+  out_of_scope:
+    description: "User asks questions unrelated to data export or beyond the available views"
+    user_message: >
+      This tool is designed for data export from procurement and financial views.
+      It cannot explain business decisions, perform calculations outside the
+      data, or access data not in scope.
+    examples:
+      - "Explain why we have a savings target of $25M for 2025."
+      - "What's the weather today?"
+      - "Write me a Python script to analyze spend."
+      - "How do I use this tool?"
+      - "Give me the invoice details with premier category."
+      - "Pull the transaction details supporting the $10M savings from Medline."

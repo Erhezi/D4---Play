@@ -1,0 +1,332 @@
+version: "1.0"
+version_last_updated: "2026-03-20"
+namespace: "purchase_order_line_with_premier_category"   # e.g. purchase_order_spend
+view_id: vw_PO_PURCHASEORDER_LINE_WITH_PCAT
+database: PRIME          # must match a top-level key in connection.yaml
+schema: "[DM_MONTYNT\\dli2]"   # SQL Server schema bracket notation
+author: "Dan Li"
+
+# ── Enums: columns with a fixed allowed value set ─────────────────────────────
+enums:
+  - ServiceCode: ["Amount", "Not A Service Item", "Quantity"]
+  - ItemType: ["Inventoried", "Non Stock", "Service", "Special"]
+  - IndexType: ["Project", "Department", "Inventory"]
+  - POCode: ["BOPO", "BRPO", "CHNG", "CPTL", "CTPR", "FIXD", "FIXD", "FPPO", "LSEQ", "REPR", "RNTL", "RUSH", "RXPO", "SRVC", "STPO", "ZCPO"]
+
+# ── Keys: the natural unique or primary key of the view ───────────────────────
+keys:
+  primary: ["PO", "PurchaseOrderLine"]   # natural grain of the view
+
+# ── Field groups: organise columns for LLM prompt context ─────────────────────
+field_groups:
+  - group_name: "Core PO Line Item Fields"  # fields that even a lean system should include for a subject area/topic
+    group_type: "core"           # ALWAYS included, LLM must NOT list these in columns[]
+    granularity: "per row"
+    description: "Minimum viable row content for any export from this view."
+    columns_included: ["POReleaseDate", "PO", "PurchaseOrderLine", "Vendor", "VendorName","VendorItem", "Quantity", "VendorBuyUnitCost", "CalculateExtendedAmount", "ItemDescription"]
+  
+  - group_name: "Optional Premier Category Enrichment"
+    group_type: "enrichment"      # only included when user explicitly asks
+    granularity: "per item"
+    description: "Including Premier custom contract category and Premier's version of UNSPSC commodity code and description."
+    columns_included: ["ContractCategory_Premier", "CommodityCode_Premier", "CcDescription_Premier"]
+  
+  - group_name: "Optional Premier Manufacturer Enrichment"
+    group_type: "enrichment"
+    granularity: "per item"
+    description: "Including Premier's manufacturer name and manufacturer sku number, which may differ from the ERP information in the source system."
+    columns_included: ["Manufacturer_Premier", "ManufacturerName_Premier", "ParentManufacturerName_Premier", "ManufacturerNumber_Premier"]
+  
+  - group_name: "Optional Financial Dimensions"
+    group_type: "contextual"      # only included when user expicitly asks
+    granularity: "per PO"
+    description: "Providing financial hierachies/dimensions that help to identify who in the organization is resonsible for the spend, GL also included."
+    columns_included: ["Company", "CompanyText", "BusinessArea", "BusinessAreaText", "CostCenter", "CostCenterText", "Index", "IndexText", "IndexType", "GL", "GLText"]
+  
+  - group_name: "Optional Item Attributes"
+    group_type: "contextual"     
+    granularity: "per item"
+    description: "Additional item attributes from ERP that may be useful for understanding the nature of the spend, but are not available for all lines and may be less relevant for certain use cases."
+    columns_included: ["ItemType", "Item", "Manufacturer", "ManufacturerNumber", "CommodityCode", "CcDescription", "Contract.WorkingContractID", "Contract.ContractAndName", "Contract.ContractClassification"]
+  
+  - group_name: "Optional Other Attributes"
+    group_type: "contextual"
+    granularity: "per row"
+    description: "Miscellaneous other attributes that may be useful for certain use cases."
+    columns_included: ["ServiceCode", "POCode", "EnteredBuyUOM", "EnteredBuyUOMMultiplier"]
+
+# ── Column catalog ─────────────────────────────────────────────────────────────
+# not necessarily inlcude all columns in the database view, only expose the ones that are relevant and useful for user exports
+# the column name must match exactly with the column name in the database view, and must be unique in the current view registry
+columns:
+  # PK
+  - name: PO
+    label: "PO Number"
+    concept_id: po_number
+    concept_role: id
+    type: string
+    accept_list_input: true
+    aliases: ["po #", "order number", "po number"]
+  
+  - name: PurchaseOrderLine
+    label: "PO Line Number"
+    concept_id: po_line_number
+    concept_role: id
+    type: string
+  
+  # Date and time
+  - name: POReleaseDate
+    label: "PO Release Date"
+    concept_id: po_realease_date
+    concept_role: attribute
+    description: "The date when the purchase order line was released. This is a key date for that ERP made the order officially known to the outside world."
+    type: date
+    aliases: ["po date"]
+  
+  # Vendor
+  - name: VendorName
+    label: "Vendor Name"
+    concept_id: vendor
+    concept_role: display
+    type: string
+
+  - name: Vendor
+    label: "Vendor ID"
+    concept_id: vendor
+    concept_role: id
+    accept_list_input: true
+    type: string
+  
+  # PO line item
+  - name: VendorItem
+    label: "Vendor Part Number"
+    concept_id: vendor_item
+    concept_role: attribute
+    description: "The item number as defined by the vendor. This may differ from the internal item number used by the purchasing organization, and can be useful for matching to vendor catalogs or understanding what specific product was purchased."
+    accept_list_input: true
+    type: string
+    aliases: ["vendor sku number", "vendor item #", "vendor catalog number"]
+
+  - name: ItemDescription
+    label: "Item Description"
+    concept_id: item_description
+    concept_role: attribute
+    description: "The text description of the item being purchased, as recorded in the ERP system. Provide additional details about the nature."
+    type: string
+
+  - name: Quantity
+    label: "Quantity"
+    concept_id: purchase_quantity
+    concept_role: attribute
+    description: "The quantity of the item being purchased in this PO line. The unit of measure for this quantity is given by the EnteredBuyUOM column."
+    type: decimal
+  
+  - name: VendorBuyUnitCost
+    label: "Unit Cost"
+    concept_id: purchase_unit_cost
+    concept_role: attribute
+    description: "The cost per unit for the item being purchased, as recorded on the purchase order. Not necessarily the same as on item master or on contract."
+    type: decimal
+    aliases: ["unit cost", "unit price"]
+  
+  - name: CalculateExtendedAmount
+    label: "Extended Amount"
+    concept_id: po_spend
+    concept_role: measure
+    description: "The total spend amount for the PO line, calculated as purchase_quantity * purchase_unit_price. This is the primary measure of spend in this view."
+    type: decimal
+    sum_check: true               # preview card shows SUM of this column as totals row
+    aliases: ["spend", "amount", "total"]
+  
+  - name: EnteredBuyUOM
+    label: "Unit of Measure"
+    concept_id: purchase_uom
+    concept_role: attribute
+    description: "The unit of measure for the quantity being purchased, as recorded on the purchase order. Common examples include 'EA' for each, 'BX' for box, etc."
+    type: string
+
+  - name: EnteredBuyUOMMultiplier
+    label: "UOM Multiplier"
+    concept_id: purchase_uom_multiplier
+    concept_role: attribute
+    description: "The multiplier to convert the entered unit of measure to the base unit of measure for the item. Buyers may not have a consistent definition for the base UOM, especially for items that are not inventories."
+    type: decimal
+  
+  - name: ServiceCode
+    label: "PO Service Code"
+    concept_id: service_code
+    concept_role: attribute
+    desciption: "ERP indication of how the PO total is tracked (by amount or quantity), if not a service item, simply unit cost * quantity."
+    type: string
+    enum_ref: ServiceCode
+
+  - name: POCode
+    label: "PO Code"
+    concept_id: po_code
+    concept_role: attribute
+    description: "ERP code that indicates the nature of the PO, such as whether it's a change order, capital expenditure, repair, etc. Useful for categorizing the spend and understanding the context of the purchase."
+    type: string
+    enum_ref: POCode
+  
+  # financial dimensions and hierarchies
+  - name: CompanyText
+    label: "Company Name"
+    concept_id: company
+    concept_role: display
+    type: string
+
+  - name: Company
+    label: "Company Code"
+    concept_id: company
+    concept_role: id
+    type: string
+
+  - name: BusinessAreaText
+    label: "Business Area Name"
+    concept_id: business_area
+    concept_role: display
+    type: string
+
+  - name: BusinessArea
+    label: "Business Area Code"
+    concept_id: business_area
+    concept_role: id
+    type: string
+  
+  - name: CostCenterText
+    label: "Cost Center Name"
+    concept_id: cost_center
+    concept_role: display
+    type: string
+  
+  - name: CostCenter
+    label: "Cost Center Code"
+    concept_id: cost_center
+    concept_role: id
+    type: string
+  
+  - name: IndexText
+    label: "Index Name"
+    concept_id: index
+    concept_role: display
+    type: string
+  
+  - name: Index
+    label: "Index Code"
+    concept_id: index
+    concept_role: id
+    type: string
+
+  - name: IndexType
+    label: "Index Type"
+    concept_id: index_type
+    concept_role: attribute
+    description: "Custom top level calssification of financial index in ERP, provide context on how cost is being managed."
+    type: string
+    enum_ref: IndexType
+  
+  - name: GLText
+    label: "GL Account Name"
+    concept_id: gl_account
+    concept_role: display
+    type: string
+  
+  - name: GL
+    label: "GL Account Code"
+    concept_id: gl_account
+    concept_role: id
+    type: string
+  
+  # item attributes
+  - name: Item
+    label: "Item Number"
+    concept_id: item
+    concept_role: attribute
+    description: "The item number in ERP. for inventory and non-stock item, this is the item maseter item number (6-digits string)."
+    type: string
+    aliases: ["item #", "item number", "ERP item number", "infor item number"]
+
+  - name: ItemType
+    label: "Item Type"
+    concept_id: item_type
+    concept_role: attribute
+    description: "ERP classification of PO line item type, provide context on how item is being managed."
+    type: string
+    enum_ref: ItemType
+
+  # Manufacturer
+  - name: ManufacturerName
+    label: "Manufacturer Name"
+    concept_id: manufacturer
+    concept_role: display
+    type: string
+  
+  - name: Manufacturer
+    label: "Manufacturer ID"
+    concept_id: manufacturer
+    concept_role: id
+    type: string
+  
+  - name: ManufacturerNumber
+    label: "Manufacturer Part Number"
+    concept_id: manufacturer_number
+    concept_role: attribute
+    type: string
+    aliases: ["manufacturer sku number", "manufacturer item #", "manufacturer catalog number"]
+  
+  # Contract & Contract Category & Commodity Code
+  - name: Contract.WorkingContractID
+    label: "CCX Contract ID"
+    concept_id: ccx_contract_id
+    concept_role: attribute
+    description: "The unique identifier for contract in CCX (the enterprise contract management system outside of ERP)."
+    type: string
+  
+  - name: Contract.ContractAndName
+    label: "Contract Name"
+    concept_id: contract_id_and_name
+    concept_role: attribute
+    description: "The system ID and contract name in ERP."
+    type: string
+  
+  - name: Contract.ContractClassification
+    label: "Contract Classification"
+    concept_id: contract_classification
+    concept_role: attribute
+    description: "Custom contract top level classification (~10 clusters), provide context on what type of contract the purchase is associated with."
+  
+  - name: CommodityCode
+    label: "UNSPSC Commodity Code"
+    concept_id: commodity_code
+    concept_role: id
+    description: "The UNSPSC commodity code (xx-xx-xxxx) assigned to the contracted item in ERP. This is a hierarchical code that classifies the type of good or service being purchased, and can be useful for spend analysis and categorization."
+    type: string
+  
+  - name: CcDescription
+    label: "UNSPSC Commodity Description"
+    concept_id: commodity_code
+    concept_role: display
+    description: "The text description of the UNSPSC commodity code assigned to the contracted item in ERP. This provides a human-readable explanation of the type of good or service being purchased."
+    type: string
+  
+  # Premier custom attributes
+  - name: ContractCategory_Premier
+    label: "Premier Contract Category"
+    concept_id: contract_category_premier
+    concept_role: attribute
+    description: "Premier's custom contract category, which may provide additional insights beyond the standard ERP contract classification. This suppose to be a more high level classification compared to UNSPSC commodity."
+    type: string
+  
+  - name: CommodityCode_Premier
+    label: "Premier Commodity Code"
+    concept_id: commodity_code_premier
+    concept_role: id
+    description: "Premier's version of UNSPSC commodity code assigned to the contracted item, which may differ from the ERP version. "
+    type: string
+  
+  - name: CcDescription_Premier
+    label: "Premier Commodity Description"
+    concept_id: commodity_code_premier
+    concept_role: display
+    description: "The text description of Premier's version of UNSPSC commodity code. This provides a human-readable explanation of the type of good or service being purchased based on Premier's classification."
+    type: string

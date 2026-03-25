@@ -10,7 +10,7 @@ from openai import OpenAI
 
 from ai_export_builder.config import settings
 from ai_export_builder.graph.state import ExportState
-from ai_export_builder.models.intent import ExportIntent
+from ai_export_builder.models.intent import ExportIntent, FilterItem, FilterOperator
 from ai_export_builder.services.openai_client import build_openai_http_client
 from ai_export_builder.services.registry_loader import load_registry
 from ai_export_builder.services.temporal import resolve as resolve_temporal
@@ -44,13 +44,25 @@ registered view.
    - For text columns that have a companion ID field (see "companion:" in the
      schema), prefer using 'like' so the system can show the
      user a preview of matching entities for confirmation.
+   - When the user mentions multiple values for the same text column
+     (e.g. "Medline or Cardinal", "vendors: Medline, Cardinal, Owens"),
+     create a SINGLE FilterItem with operator "like" and value as a JSON
+     list: ["Medline", "Cardinal"]. Do NOT create separate FilterItem
+     entries for the same column — the system generates within-field OR
+     logic automatically.
+   - Different fields must be separate FilterItem entries (AND logic).
    - Any column used in a filter is automatically added to the output.
 4. For date filters, resolve relative expressions (e.g. "last quarter",
    "YTD") using the temporal context provided.
 5. NEVER produce JOINs, GROUP BY, or aggregations.
 6. If the user's request is ambiguous or you cannot map something, add a
    note to `warnings` — do NOT invent columns.
-7. Respond with ONLY the JSON object, no surrounding text.
+7. If the user mentions sorting or ordering (e.g. "sort by vendor name",
+   "order by amount descending", "highest spend first"), populate `sort_by`
+   with one or more entries. Each entry has a `column` and optional
+   `direction` ("ASC" or "DESC", default "ASC"). Only use columns that
+   exist in the view.
+8. Respond with ONLY the JSON object, no surrounding text.
 
 ## Temporal Context
 - Current date: {current_date}
@@ -65,6 +77,9 @@ registered view.
   "columns": ["<col1>", "<col2>", ...],
   "filters": [
     {{"column": "<col>", "operator": "<op>", "value": "<val or [val1,val2]>"}}
+  ],
+  "sort_by": [
+    {{"column": "<col>", "direction": "ASC|DESC"}}
   ],
   "warnings": ["<optional note>"]
 }}
@@ -84,9 +99,67 @@ def _build_system_prompt(state: ExportState) -> str:
     )
 
 
+def _undisambiguate_for_prompt(intent: ExportIntent, state: ExportState) -> ExportIntent:
+    """Reverse disambiguation so the LLM sees text-column LIKE filters.
+
+    After disambiguation, filters like ``VendorName LIKE 'TIDI'`` become
+    ``VendorID eq '1001815'``.  When building a refinement prompt we need
+    the LLM to see the original text-column form so it can properly merge
+    new search terms (e.g. "add Stryker") and let disambiguation run again.
+    """
+    disambiguation_results = state.get("disambiguation_results", [])
+    if not disambiguation_results:
+        return intent
+
+    # id_col → original text filter info
+    id_to_text: dict[str, dict] = {}
+    for r in disambiguation_results:
+        id_to_text[r["companion"]] = {
+            "column": r["column"],
+            "operator": r.get("original_operator", "like"),
+            "value": r["original_value"],
+        }
+
+    new_filters: list[FilterItem] = []
+    for f in intent.filters:
+        if f.column in id_to_text:
+            orig = id_to_text[f.column]
+            new_filters.append(FilterItem(
+                column=orig["column"],
+                operator=FilterOperator(orig["operator"]),
+                value=orig["value"],
+            ))
+        else:
+            new_filters.append(f)
+
+    return intent.model_copy(update={"filters": new_filters})
+
+
 def _build_user_message(state: ExportState) -> str:
-    """Build the user message, including validation feedback if retrying."""
+    """Build the user message, including validation feedback and prior intent context."""
     msg = state["user_query"]
+
+    # Delta-parsing: if a previous intent exists, include it as context
+    previous_intent = state.get("previous_intent")
+    if previous_intent is not None:
+        # Reverse disambiguation so the LLM sees text-column LIKE filters
+        prompt_intent = _undisambiguate_for_prompt(previous_intent, state)
+        prev_json = prompt_intent.model_dump_json(indent=2)
+        original_query = state.get("original_user_query", "")
+        msg = (
+            f"[ORIGINAL USER REQUEST]\n{original_query}\n\n"
+            "[CURRENT EXPORT STATE — merge the user's new request with this existing intent. "
+            "Add new filters, remove dropped ones, modify changed values, keep unchanged parts. "
+            "If the user asks to change the view or start over, produce a fresh intent.]\n"
+            f"{prev_json}\n\n"
+            "[DISAMBIGUATION NOTE: Filters on text columns with companion ID fields "
+            "(e.g. VendorName) are shown in their original text form. When the user "
+            "asks to add more values for the same entity, ADD them to the existing "
+            "text-column filter value list using LIKE. Do NOT use the companion ID "
+            "column — the system handles ID resolution automatically.]\n\n"
+            f"[USER'S REFINEMENT REQUEST]\n{msg}"
+        )
+
     errors = state.get("validation_errors", [])
     if errors:
         feedback = "\n".join(f"- {e}" for e in errors)
@@ -112,7 +185,7 @@ def _resolve_temporal_filters(intent: ExportIntent, state: ExportState) -> Expor
             result = resolve_temporal(f.value, reference_date=ref_date, fy_start_month=fy_start)
             if result:
                 start_d, end_d = result
-                f.operator = "between"  # type: ignore[assignment]
+                f.operator = FilterOperator.between
                 f.value = [start_d.isoformat(), end_d.isoformat()]
     return intent
 
@@ -186,6 +259,7 @@ def node_parse_intent(state: ExportState) -> dict[str, Any]:
                      intent.selected_view, len(intent.columns), len(intent.filters))
         return {
             "intent": intent,
+            "previous_intent": intent,
             "validation_errors": [],
             "status": "parsing",
         }

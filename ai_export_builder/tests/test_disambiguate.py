@@ -125,3 +125,61 @@ class TestDisambiguateNode:
         result = node_disambiguate(_make_state(intent))
         assert result["disambiguation_needed"] is False
         mock_exec.assert_not_called()
+
+    @patch("ai_export_builder.graph.nodes.disambiguate.execute_query_for_view")
+    def test_multi_value_like_disambiguates_each(self, mock_exec):
+        """Multi-value LIKE filter disambiguates each value separately."""
+        # First call for "Medline", second for "Cardinal"
+        mock_exec.side_effect = [
+            pd.DataFrame({
+                "VendorName": ["Medline Industries, LP"],
+                "Vendor": ["100123"],
+            }),
+            pd.DataFrame({
+                "VendorName": ["Cardinal Health, Inc."],
+                "Vendor": ["200456"],
+            }),
+        ]
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[
+                FilterItem(
+                    column="VendorName",
+                    operator=FilterOperator.like,
+                    value=["Medline", "Cardinal"],
+                ),
+            ],
+        )
+        result = node_disambiguate(_make_state(intent))
+        assert result["disambiguation_needed"] is True
+        assert len(result["disambiguation_results"]) == 1
+        matches = result["disambiguation_results"][0]["matches"]
+        assert len(matches) == 2
+        texts = {m["text"] for m in matches}
+        assert "Medline Industries, LP" in texts
+        assert "Cardinal Health, Inc." in texts
+        assert mock_exec.call_count == 2
+
+    @patch("ai_export_builder.graph.nodes.disambiguate.execute_query_for_view")
+    def test_multi_value_like_deduplicates(self, mock_exec):
+        """If both values return the same entity, only one copy appears."""
+        same_row = pd.DataFrame({
+            "VendorName": ["Medline Industries, LP"],
+            "Vendor": ["100123"],
+        })
+        mock_exec.side_effect = [same_row, same_row.copy()]
+        intent = ExportIntent(
+            selected_view="vw_PO_PURCHASEORDER_LINE_WITH_PCAT",
+            columns=["VendorName"],
+            filters=[
+                FilterItem(
+                    column="VendorName",
+                    operator=FilterOperator.like,
+                    value=["Medline", "Med"],
+                ),
+            ],
+        )
+        result = node_disambiguate(_make_state(intent))
+        matches = result["disambiguation_results"][0]["matches"]
+        assert len(matches) == 1  # deduplicated
