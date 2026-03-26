@@ -35,13 +35,11 @@ def add_message(role: str, content: str) -> None:
 
 
 def get_user_input() -> str | None:
-    """Render the chat input and return the user's text (or None)."""
-    # Disable chat when verification card is shown, UNLESS user clicked Refine
-    disabled = (
-        st.session_state.get("awaiting_confirmation", False)
-        and not st.session_state.get("awaiting_refinement_input", False)
-    )
+    """Render the chat input and return the user's text (or None).
+
+    Chat is always enabled — users can type refinements at any time,
+    including while the verification card is displayed.
+    """
     return st.chat_input(
-        "Describe the data you need (e.g. 'Export all Medline glove spend for last month')",
-        disabled=disabled,
+        "Describe the data you need, or type to refine your current export…",
     )

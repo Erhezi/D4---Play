@@ -32,13 +32,13 @@ def _make_state(**overrides) -> ExportState:
 class TestResetSignal:
     def test_returns_reset_status(self):
         result = node_reset_signal(_make_state())
-        assert result["status"] == "reset"
+        assert result["status"] == "failed"
 
     def test_returns_user_friendly_message(self):
         result = node_reset_signal(_make_state())
         errors = result["validation_errors"]
         assert len(errors) == 1
-        assert "maximum" in errors[0].lower()
+        assert "refinement" in errors[0].lower()
         assert "new conversation" in errors[0].lower()
 
     @patch("ai_export_builder.graph.nodes.reset_signal.settings")

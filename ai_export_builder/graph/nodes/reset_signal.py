@@ -12,13 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 def node_reset_signal(state: ExportState) -> dict[str, Any]:
-    """Return a user-friendly message when the maximum refinement rounds are exhausted."""
+    """Return a user-friendly suggestion when the maximum refinement rounds are exhausted."""
     max_rounds = settings.max_refinement_rounds
     logger.info("node_reset_signal: refinement limit (%d) reached", max_rounds)
     return {
-        "status": "reset",
+        "status": "failed",
         "validation_errors": [
-            f"You've reached the maximum of {max_rounds} refinements for this session. "
-            "Please start a new conversation for best accuracy."
+            f"You've gone through {max_rounds} refinement rounds. "
+            "For best accuracy, I'd recommend starting a new conversation. "
+            "You can click **Clear conversation** in the sidebar to start fresh, "
+            "or keep refining if you'd like."
         ],
     }

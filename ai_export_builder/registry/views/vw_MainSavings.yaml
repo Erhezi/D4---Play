@@ -43,7 +43,7 @@ columns:
     label: "Savings Channel"
     concept_id: savings_channel
     concept_role: attribute
-    description: "The channel through which the savings is realized, either from operational initiatives or rebate programs."
+    description: "The channel through which the savings is realized, either operational or rebate. Useful for fitlering what type of savings user want to look at."
     type: string
     enum_ref: Savings Channel
   
@@ -80,7 +80,7 @@ columns:
     label: "Rebate Status"
     concept_id: rebate_status
     concept_role: attribute
-    description: "The approval status of the rebate savings initiative, for operational initiative, it will be 'N.A.'"
+    description: "The approval status of the rebate, for operational initiative, it will be 'N.A.'"
     type: string
     enum_ref: Rebate Status
   

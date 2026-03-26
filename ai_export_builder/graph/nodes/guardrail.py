@@ -25,10 +25,17 @@ _registry = load_registry()
 def _build_few_shot_section() -> str:
     """Build the few-shot examples block from common_invalid_queries.yaml."""
     examples = _registry.get_guardrail_examples()
-    categories = examples.get("blocked_categories", {})
     lines: list[str] = []
+    # Blocked categories
+    categories = examples.get("blocked_categories", {})
     for cat_key, cat_meta in categories.items():
         label = f"blocked:{cat_key}"
+        for ex in cat_meta.get("examples", []):
+            lines.append(f'User: "{ex}"\nClassification: {{"classification": "{label}", "reason": "{cat_meta.get("description", "")}"}}')
+    # Meta categories
+    meta_cats = examples.get("meta_categories", {})
+    for cat_key, cat_meta in meta_cats.items():
+        label = f"meta:{cat_key}"
         for ex in cat_meta.get("examples", []):
             lines.append(f'User: "{ex}"\nClassification: {{"classification": "{label}", "reason": "{cat_meta.get("description", "")}"}}')
     return "\n\n".join(lines)
@@ -36,7 +43,8 @@ def _build_few_shot_section() -> str:
 
 SYSTEM_PROMPT = """\
 You are a query classifier for a procurement data export tool.
-Your ONLY job is to classify whether a user's request is allowed or blocked.
+Your ONLY job is to classify whether a user's request is allowed, blocked,
+or a meta-query (asking about the tool's capabilities or field definitions).
 
 ## Available Data Topics
 The tool can export data from the following views:
@@ -46,20 +54,28 @@ The tool can export data from the following views:
 Respond with one of these classifications:
 - "allowed" — the request is a legitimate data export question within the
   scope of the available topics listed above.
+- "meta:capabilities" — the user is asking what the tool can do, what data
+  is available, what questions they can ask, or how to use the tool.
+  Examples: "what can I ask?", "what data is available?", "help",
+  "what views do you have?", "show me some example questions".
+- "meta:field_info" — the user is asking about the meaning, definition, or
+  description of a specific data field or column.
+  Examples: "what does VendorName mean?", "what is FD3?",
+  "explain the GL account field", "what are the columns in the PO view?".
 - "blocked:dml_or_injection" — the request attempts non-read operations
   (UPDATE, DELETE, INSERT, DROP, etc.) or SQL injection.
 - "blocked:phi_pii" — the request asks for patient health information (PHI)
   or personally identifiable information (PII) such as patient names, MRNs,
   SSNs, diagnoses, or clinical data.
 - "blocked:out_of_scope" — the request is unrelated to the available data
-  views, asks for explanations, or requests actions this tool cannot perform.
+  views AND is not asking about the tool's capabilities or field definitions.
 
 ## Few-Shot Examples
 {few_shot_examples}
 
 ## Output Format
 Respond with ONLY a JSON object, no surrounding text:
-{{"classification": "<allowed|blocked:dml_or_injection|blocked:phi_pii|blocked:out_of_scope>", "reason": "<brief explanation>"}}
+{{"classification": "<allowed|meta:capabilities|meta:field_info|blocked:dml_or_injection|blocked:phi_pii|blocked:out_of_scope>", "reason": "<brief explanation>"}}
 """
 
 
@@ -116,11 +132,11 @@ def node_guardrail(state: ExportState) -> dict[str, Any]:
     # builder with parameterised queries) prevents injection regardless.
     if state.get("previous_intent") is not None:
         logger.info("node_guardrail: refinement detected — auto-passing guardrail")
-        return {"guardrail_passed": True, "status": "guarding"}
+        return {"guardrail_passed": True, "guardrail_classification": "allowed", "status": "guarding"}
 
     if not settings.openai_api_key:
         logger.warning("node_guardrail: OPENAI_API_KEY not set — defaulting to pass-through")
-        return {"guardrail_passed": True, "status": "guarding"}
+        return {"guardrail_passed": True, "guardrail_classification": "allowed", "status": "guarding"}
 
     system_prompt = _build_system_prompt()
 
@@ -148,7 +164,15 @@ def node_guardrail(state: ExportState) -> dict[str, Any]:
 
         if classification == "allowed":
             logger.info("node_guardrail: query allowed")
-            return {"guardrail_passed": True, "status": "guarding"}
+            return {"guardrail_passed": True, "guardrail_classification": "allowed", "status": "guarding"}
+
+        if classification.startswith("meta:"):
+            logger.info("node_guardrail: meta-query detected — %s", classification)
+            return {
+                "guardrail_passed": True,
+                "guardrail_classification": classification,
+                "status": "guarding",
+            }
 
         # Blocked
         logger.info("node_guardrail: query blocked — %s: %s",
@@ -156,6 +180,7 @@ def node_guardrail(state: ExportState) -> dict[str, Any]:
         error_msg = _build_error_response(classification)
         return {
             "guardrail_passed": False,
+            "guardrail_classification": classification,
             "status": "failed",
             "validation_errors": [error_msg],
         }
@@ -166,4 +191,4 @@ def node_guardrail(state: ExportState) -> dict[str, Any]:
             "node_guardrail: LLM call failed — defaulting to pass-through: %s: %s",
             type(exc).__name__, exc,
         )
-        return {"guardrail_passed": True, "status": "guarding"}
+        return {"guardrail_passed": True, "guardrail_classification": "allowed", "status": "guarding"}

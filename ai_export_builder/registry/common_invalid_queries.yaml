@@ -41,6 +41,26 @@ blocked_categories:
       - "Explain why we have a savings target of $25M for 2025."
       - "What's the weather today?"
       - "Write me a Python script to analyze spend."
-      - "How do I use this tool?"
       - "Give me the invoice details with premier category."
       - "Pull the transaction details supporting the $10M savings from Medline."
+
+# Meta-query categories — NOT blocked, used for routing to helpful responses
+meta_categories:
+  capabilities:
+    description: "User asks what the tool can do, what data is available, or how to use it"
+    examples:
+      - "What can I ask?"
+      - "What data is available?"
+      - "Help"
+      - "What views do you have?"
+      - "Show me some example questions."
+      - "How do I use this tool?"
+      - "What kind of exports can I do?"
+  field_info:
+    description: "User asks about the meaning or definition of a specific field or column"
+    examples:
+      - "What does VendorName mean?"
+      - "What is FD3?"
+      - "Explain the GL account field."
+      - "What are the columns in the PO view?"
+      - "What does the Premier category column contain?"

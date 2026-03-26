@@ -39,6 +39,11 @@ class ExportState(TypedDict, total=False):
 
     # Guardrail
     guardrail_passed: bool              # Set by node_guardrail
+    guardrail_classification: str       # e.g. "allowed", "blocked:*", "meta:capabilities", "meta:field_info"
+
+    # Guidance (proactive clarification for vague requests)
+    guidance_question: str              # Clarifying question from LLM when request is too vague
+    meta_response: str                  # Response text for meta-queries ("what can I ask?", field info)
 
     # Disambiguation
     disambiguation_needed: bool

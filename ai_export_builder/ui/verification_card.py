@@ -8,6 +8,8 @@ import streamlit as st
 
 from ai_export_builder.models.intent import OPERATOR_LABELS, ExportIntent, FilterItem, FilterOperator
 from ai_export_builder.services.registry_loader import Registry
+from ai_export_builder.services.sql_builder import build_query
+from ai_export_builder.config import settings
 
 # Build display-label list and reverse lookup for the operator selectbox
 _OP_DISPLAY = [(op, OPERATOR_LABELS.get(op.value, op.value)) for op in FilterOperator]
@@ -264,6 +266,16 @@ def render_verification_card(
         "filters": edited_filters,
     })
 
+    # --- Generated SQL (collapsed) ---
+    try:
+        _sql, _params = build_query(edited_intent, settings.user_facilities)
+        with st.expander("🔍 Generated SQL", expanded=False):
+            st.code(_sql, language="sql")
+            if _params:
+                st.caption(f"Parameters: {list(_params)}")
+    except Exception:
+        pass  # Non-critical — don't block the card
+
     # --- Preview & Action buttons ---
     preview_active = st.session_state.get("preview_active", False)
 
@@ -283,8 +295,8 @@ def render_verification_card(
                 if idx < len(metric_cols):
                     metric_cols[idx].metric(f"Total {col}", f"${total:,.2f}")
 
-        # Show all three buttons: Re-Preview, Confirm, Refine
-        btn_col1, btn_col2, btn_col3, _ = st.columns([1, 1, 1, 2])
+        # Show action buttons: Re-Preview and Confirm; refinement via chat
+        btn_col1, btn_col2, _ = st.columns([1, 1, 3])
 
         if btn_col1.button("👁 Re-Preview", key="btn_preview"):
             return "preview", edited_intent
@@ -292,8 +304,7 @@ def render_verification_card(
         if btn_col2.button("✅ Confirm Export", type="primary", key="btn_confirm"):
             return True, edited_intent
 
-        if btn_col3.button("🔄 Refine", key="btn_refine"):
-            return "refine", edited_intent
+        st.caption("💬 Want to change something? Just type in the chat below — e.g. *\"add a date filter for last quarter\"*")
     else:
         # Show Preview button only (no Confirm/Refine until preview is done)
         if st.button("👁 Preview", type="primary", key="btn_preview"):

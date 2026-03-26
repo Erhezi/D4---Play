@@ -23,6 +23,7 @@ from ai_export_builder.graph.nodes.disambiguate import node_disambiguate
 from ai_export_builder.graph.nodes.execute_export import node_execute_export
 from ai_export_builder.graph.nodes.guardrail import node_guardrail
 from ai_export_builder.graph.nodes.hydrate_preview import node_hydrate_preview
+from ai_export_builder.graph.nodes.meta_responder import node_meta_responder
 from ai_export_builder.graph.nodes.orchestrator import node_orchestrator
 from ai_export_builder.graph.nodes.parse_intent import node_parse_intent
 from ai_export_builder.graph.nodes.reset_signal import node_reset_signal
@@ -38,6 +39,14 @@ MAX_RETRIES = 2
 # Routing functions
 # ------------------------------------------------------------------
 
+def _after_guardrail(state: ExportState) -> str:
+    """Route after guardrail: meta-queries go to meta_responder, everything else to orchestrator."""
+    classification = state.get("guardrail_classification", "")
+    if classification.startswith("meta:"):
+        return "meta_responder"
+    return "orchestrator"
+
+
 def _after_orchestrator(state: ExportState) -> str:
     """Route after orchestrator: parse, reset, or end (if guardrail blocked)."""
     status = state.get("status", "")
@@ -52,10 +61,15 @@ def _after_orchestrator(state: ExportState) -> str:
 def _after_validate(state: ExportState) -> str:
     """Decide the next step after validation.
 
+    - If status is needs_guidance → route to end for HITL clarification.
     - If no errors → go to disambiguate.
     - If errors and retries remain → loop back to parse_intent.
     - If errors and retries exhausted → surface to human_review with errors.
     """
+    if state.get("status") == "needs_guidance":
+        logger.info("Guidance needed — routing to end for HITL clarification")
+        return "end"
+
     errors = state.get("validation_errors", [])
     retry = state.get("retry_count", 0)
 
@@ -113,6 +127,7 @@ def build_graph() -> StateGraph:
 
     # Nodes
     graph.add_node("guardrail", node_guardrail)
+    graph.add_node("meta_responder", node_meta_responder)
     graph.add_node("orchestrator", node_orchestrator)
     graph.add_node("parse_intent", node_parse_intent)
     graph.add_node("validate_intent", node_validate_intent)
@@ -125,9 +140,17 @@ def build_graph() -> StateGraph:
     graph.add_node("execute_export", node_execute_export)
     graph.add_node("reset_signal", node_reset_signal)
 
-    # Entry: guardrail → orchestrator
+    # Entry: guardrail → conditional routing (meta_responder or orchestrator)
     graph.set_entry_point("guardrail")
-    graph.add_edge("guardrail", "orchestrator")
+    graph.add_conditional_edges(
+        "guardrail",
+        _after_guardrail,
+        {
+            "meta_responder": "meta_responder",
+            "orchestrator": "orchestrator",
+        },
+    )
+    graph.add_edge("meta_responder", END)
 
     # Orchestrator routing
     graph.add_conditional_edges(
@@ -153,6 +176,7 @@ def build_graph() -> StateGraph:
             "disambiguate": "disambiguate",
             "human_review": "human_review",
             "retry_parse": "increment_retry",
+            "end": END,
         },
     )
 

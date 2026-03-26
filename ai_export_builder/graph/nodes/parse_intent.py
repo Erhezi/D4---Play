@@ -62,7 +62,18 @@ registered view.
    with one or more entries. Each entry has a `column` and optional
    `direction` ("ASC" or "DESC", default "ASC"). Only use columns that
    exist in the view.
-8. Respond with ONLY the JSON object, no surrounding text.
+8. If the user's request is too vague to produce a reliable export — for
+   example, they don't specify a clear dataset/view, or give no filtering
+   criteria, or it's unclear what data they need — set `guidance_needed`
+   to true and provide a `guidance_question` that helps them clarify.
+   Guide the user to think in this order:
+   (a) Which dataset/datasource to use (PO lines, invoices, or savings?)
+   (b) What columns/attributes/concepts are needed
+   (c) What filtering conditions to add to limit the scope
+   Only set `guidance_needed` when the request truly cannot produce a
+   useful export. If you can make a reasonable interpretation, do so and
+   add notes to `warnings` instead.
+9. Respond with ONLY the JSON object, no surrounding text.
 
 ## Temporal Context
 - Current date: {current_date}
@@ -81,7 +92,9 @@ registered view.
   "sort_by": [
     {{"column": "<col>", "direction": "ASC|DESC"}}
   ],
-  "warnings": ["<optional note>"]
+  "warnings": ["<optional note>"],
+  "guidance_needed": false,
+  "guidance_question": ""
 }}
 """
 
@@ -250,6 +263,27 @@ def node_parse_intent(state: ExportState) -> dict[str, Any]:
         print(f"\n{'='*60}\nLLM returned JSON:\n{raw}\n{'='*60}\n")
         logger.info("LLM returned JSON: %s", raw)
         data = json.loads(raw)
+
+        # Check if the LLM flagged the request as needing guidance
+        if data.get("guidance_needed"):
+            guidance_q = data.get("guidance_question", "Could you tell me more about what data you need?")
+            logger.info("node_parse_intent: guidance needed — %s", guidance_q)
+            # Build a partial intent if possible (view may be set)
+            partial_intent = None
+            if data.get("selected_view"):
+                try:
+                    partial_intent = ExportIntent(**{k: v for k, v in data.items()
+                                                     if k not in ("guidance_needed", "guidance_question")})
+                except Exception:
+                    pass
+            return {
+                "intent": partial_intent,
+                "previous_intent": partial_intent,
+                "guidance_question": guidance_q,
+                "validation_errors": [],
+                "status": "needs_guidance",
+            }
+
         intent = ExportIntent(**data)
 
         # Post-process temporal expressions in filters
